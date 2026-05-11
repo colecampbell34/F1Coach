@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from f1coach.coach import LapSample, ReferenceProfile
+from f1coach.coach import LapSample, ReferenceProfile, TheoreticalSegment
 
 
 def load_reference(path: str | Path) -> ReferenceProfile:
@@ -23,6 +23,7 @@ def load_reference(path: str | Path) -> ReferenceProfile:
         lap_count=int(raw.get("lapCount") or raw.get("lap_count") or 1),
         synthetic=bool(raw.get("synthetic", False)),
         assist_profile=dict(raw.get("assistProfile") or raw.get("assist_profile") or {}),
+        segments=[_segment_from_dict(item) for item in raw.get("segments", [])],
     )
 
 
@@ -36,9 +37,30 @@ def reference_to_json(reference: ReferenceProfile) -> str:
         "lapCount": reference.lap_count,
         "synthetic": reference.synthetic,
         "assistProfile": reference.assist_profile,
+        "segments": [_segment_to_dict(segment) for segment in reference.segments],
         "samples": [_sample_to_dict(sample) for sample in reference.samples],
     }
     return json.dumps(payload, indent=2)
+
+
+def _segment_from_dict(raw: dict[str, Any]) -> TheoreticalSegment:
+    return TheoreticalSegment(
+        index=int(_get(raw, "index", default=0)),
+        start_pct=float(_get(raw, "start_pct", "startPct", default=0.0)),
+        end_pct=float(_get(raw, "end_pct", "endPct", default=0.0)),
+        source_lap_num=int(_get(raw, "source_lap_num", "sourceLapNum", default=0)),
+        segment_time_ms=int(_get(raw, "segment_time_ms", "segmentTimeMs", default=0)),
+    )
+
+
+def _segment_to_dict(segment: TheoreticalSegment) -> dict[str, Any]:
+    return {
+        "index": segment.index,
+        "startPct": segment.start_pct,
+        "endPct": segment.end_pct,
+        "sourceLapNum": segment.source_lap_num,
+        "segmentTimeMs": segment.segment_time_ms,
+    }
 
 
 def _sample_from_dict(raw: dict[str, Any]) -> LapSample:
@@ -53,6 +75,10 @@ def _sample_from_dict(raw: dict[str, Any]) -> LapSample:
         gear=int(_get(raw, "gear", default=0)),
         engine_rpm=int(_get(raw, "engineRpm", "engine_rpm", default=0)),
         ers_percent=_optional_float(_get(raw, "ersPercent", "ers_percent", default=None)),
+        ers_deploy_mode=_optional_int(_get(raw, "ersDeployMode", "ers_deploy_mode", default=None)),
+        ers_deployed_this_lap_j=_optional_float(
+            _get(raw, "ersDeployedThisLapJ", "ers_deployed_this_lap_j", default=None)
+        ),
         fuel_kg=_optional_float(_get(raw, "fuelKg", "fuel_kg", default=None)),
         lateral_g=_optional_float(_get(raw, "lateralG", "lateral_g", default=None)),
         longitudinal_g=_optional_float(_get(raw, "longitudinalG", "longitudinal_g", default=None)),
@@ -74,6 +100,8 @@ def _sample_to_dict(sample: LapSample) -> dict[str, Any]:
         "gear": sample.gear,
         "engineRpm": sample.engine_rpm,
         "ersPercent": sample.ers_percent,
+        "ersDeployMode": sample.ers_deploy_mode,
+        "ersDeployedThisLapJ": sample.ers_deployed_this_lap_j,
         "fuelKg": sample.fuel_kg,
         "lateralG": sample.lateral_g,
         "longitudinalG": sample.longitudinal_g,
@@ -92,6 +120,10 @@ def _get(raw: dict[str, Any], *keys: str, default: Any) -> Any:
 
 def _optional_float(value: Any) -> float | None:
     return None if value is None else float(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    return None if value is None else int(value)
 
 
 def _position(value: Any) -> tuple[float, float, float] | None:

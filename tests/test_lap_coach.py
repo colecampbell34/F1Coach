@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from f1coach.coach import CompletedLap, LapCoach, LapSample
+from f1coach.coach import CompletedLap, LapCoach, LapSample, ReferenceProfile
 from f1coach.models import CarTelemetrySnapshot, LapSnapshot, PacketHeader, SessionInfo
 
 
@@ -56,6 +56,77 @@ class LapCoachTests(unittest.TestCase):
         assert coach.ideal_reference is not None
         self.assertEqual(coach.ideal_reference.name, "Ideal lap")
         self.assertLessEqual(coach.ideal_reference.lap_time_ms, 89_000)
+        self.assertTrue(coach.ideal_reference.segments)
+        self.assertTrue(all(segment.source_lap_num in {1, 2} for segment in coach.ideal_reference.segments))
+
+    def test_theoretical_best_sums_fastest_loops_from_any_clean_lap(self) -> None:
+        coach = LapCoach(sample_buckets=60, theoretical_loop_count=3)
+        lap_a = CompletedLap(
+            1,
+            90_000,
+            30_000,
+            30_000,
+            False,
+            self._piecewise_samples([28_000, 32_000, 30_000]),
+        )
+        lap_b = CompletedLap(
+            2,
+            87_000,
+            30_000,
+            29_000,
+            False,
+            self._piecewise_samples([31_000, 27_000, 29_000]),
+        )
+        coach.clean_laps = [lap_a, lap_b]
+
+        coach._rebuild_ideal_reference()
+
+        self.assertIsNotNone(coach.ideal_reference)
+        assert coach.ideal_reference is not None
+        self.assertEqual(coach.ideal_reference.lap_time_ms, 84_000)
+        self.assertEqual([segment.source_lap_num for segment in coach.ideal_reference.segments], [1, 2, 2])
+
+    def test_identifies_ers_underuse_on_corner_exit(self) -> None:
+        coach = LapCoach(sample_buckets=30)
+        lap_samples = [
+            self._sample(10_000, 0.30, 130, 0.65, 0.0, ers_j=100_000),
+            self._sample(11_000, 0.32, 162, 0.95, 0.0, ers_j=130_000),
+        ]
+        ref_samples = [
+            self._sample(10_000, 0.30, 142, 0.70, 0.0, ers_j=100_000),
+            self._sample(10_650, 0.32, 178, 1.00, 0.0, ers_j=200_000),
+        ]
+        lap = CompletedLap(4, 80_000, 25_000, 27_000, False, lap_samples)
+        reference = ReferenceProfile("Imported", "test", 79_000, 24_500, 26_800, ref_samples)
+
+        insights = coach.analyze_lap(lap, reference)
+
+        self.assertTrue(any(insight.category == "ERS deployment" for insight in insights))
+
+    def test_reports_setup_trend_for_repeated_traction_loss(self) -> None:
+        coach = LapCoach(sample_buckets=30)
+        lap_samples = [
+            self._sample(10_000, 0.10, 90, 0.75, 0.0, slip=0.32),
+            self._sample(11_000, 0.13, 120, 0.90, 0.0, slip=0.34),
+            self._sample(20_000, 0.50, 95, 0.76, 0.0, slip=0.31),
+            self._sample(21_000, 0.53, 126, 0.92, 0.0, slip=0.33),
+        ]
+        ref_samples = [
+            self._sample(10_000, 0.10, 98, 0.70, 0.0, slip=0.12),
+            self._sample(10_700, 0.13, 136, 0.92, 0.0, slip=0.14),
+            self._sample(20_000, 0.50, 102, 0.72, 0.0, slip=0.11),
+            self._sample(20_700, 0.53, 140, 0.94, 0.0, slip=0.12),
+        ]
+        lap = CompletedLap(5, 80_000, 25_000, 27_000, False, lap_samples)
+        reference = ReferenceProfile("Imported", "test", 79_000, 24_500, 26_800, ref_samples)
+        coach.latest_insights = [
+            coach._classify_segment(0.10, 0.13, 300, lap_samples[:2], ref_samples[:2]),
+            coach._classify_segment(0.50, 0.53, 280, lap_samples[2:], ref_samples[2:]),
+        ]
+
+        suggestions = coach._setup_suggestions(lap, reference)
+
+        self.assertTrue(any("exit traction" in suggestion for suggestion in suggestions))
 
     def _telemetry(self, speed: int, throttle: float, brake: float) -> CarTelemetrySnapshot:
         return CarTelemetrySnapshot(
@@ -125,6 +196,8 @@ class LapCoachTests(unittest.TestCase):
                     gear=8,
                     engine_rpm=12_000,
                     ers_percent=None,
+                    ers_deploy_mode=None,
+                    ers_deployed_this_lap_j=None,
                     fuel_kg=None,
                     lateral_g=None,
                     longitudinal_g=None,
@@ -134,6 +207,58 @@ class LapCoachTests(unittest.TestCase):
                 )
             )
         return CompletedLap(lap_num, lap_ms, 30_000, 30_000, False, samples)
+
+    def _sample(
+        self,
+        lap_time_ms: int,
+        normalized_distance: float,
+        speed_kmh: int,
+        throttle: float,
+        brake: float,
+        steer: float = 0.0,
+        slip: float | None = None,
+        ers_j: float | None = None,
+    ) -> LapSample:
+        return LapSample(
+            lap_time_ms=lap_time_ms,
+            lap_distance_m=normalized_distance * 5000,
+            normalized_distance=normalized_distance,
+            speed_kmh=speed_kmh,
+            throttle=throttle,
+            brake=brake,
+            steer=steer,
+            gear=5,
+            engine_rpm=10_500,
+            ers_percent=None,
+            ers_deploy_mode=None,
+            ers_deployed_this_lap_j=ers_j,
+            fuel_kg=None,
+            lateral_g=None,
+            longitudinal_g=None,
+            avg_slip_ratio=slip,
+            avg_slip_angle=None,
+            world_position=(normalized_distance * 100, 0.0, normalized_distance * 50),
+        )
+
+    def _piecewise_samples(self, segment_times: list[int]) -> list[LapSample]:
+        samples: list[LapSample] = []
+        boundaries = [0.0, 1 / 3, 2 / 3, 0.999]
+        cumulative = [0]
+        for segment_time in segment_times:
+            cumulative.append(cumulative[-1] + segment_time)
+        for index in range(61):
+            distance = min(0.999, index / 60)
+            if distance <= boundaries[1]:
+                ratio = distance / boundaries[1] if boundaries[1] else 0
+                lap_time_ms = int(cumulative[0] + ratio * segment_times[0])
+            elif distance <= boundaries[2]:
+                ratio = (distance - boundaries[1]) / (boundaries[2] - boundaries[1])
+                lap_time_ms = int(cumulative[1] + ratio * segment_times[1])
+            else:
+                ratio = (distance - boundaries[2]) / (boundaries[3] - boundaries[2])
+                lap_time_ms = int(cumulative[2] + ratio * segment_times[2])
+            samples.append(self._sample(lap_time_ms, distance, 250, 1.0, 0.0))
+        return samples
 
 
 if __name__ == "__main__":

@@ -125,13 +125,32 @@ INDEX_HTML = """<!doctype html>
   </header>
 
   <main class="shell">
-    <section class="panel metrics">
-      <div><span>Speed</span><strong id="speed">--</strong></div>
-      <div><span>Gear</span><strong id="gear">--</strong></div>
-      <div><span>Throttle</span><strong id="throttle">--</strong></div>
-      <div><span>Brake</span><strong id="brake">--</strong></div>
-      <div><span>Delta</span><strong id="delta">--</strong></div>
-      <div><span>ERS</span><strong id="ers">--</strong></div>
+    <section class="panel cockpit">
+      <div class="speedBlock">
+        <span>Speed</span>
+        <strong id="speed">--</strong>
+        <small>km/h</small>
+      </div>
+      <div class="gearBlock">
+        <span>Gear</span>
+        <strong id="gear">-</strong>
+      </div>
+      <div class="stackBlock">
+        <div><span>Delta</span><strong id="delta">--</strong></div>
+        <div><span>ERS</span><strong id="ers">--</strong></div>
+      </div>
+      <div class="pedals">
+        <div class="pedal">
+          <span>Throttle</span>
+          <div class="bar"><i id="throttleBar"></i></div>
+          <strong id="throttle">--</strong>
+        </div>
+        <div class="pedal">
+          <span>Brake</span>
+          <div class="bar brake"><i id="brakeBar"></i></div>
+          <strong id="brake">--</strong>
+        </div>
+      </div>
     </section>
 
     <section class="layout">
@@ -146,6 +165,8 @@ INDEX_HTML = """<!doctype html>
       <aside class="panel">
         <div class="panelHeader"><h2>Priority Areas</h2></div>
         <div id="insights" class="insights"></div>
+        <div class="panelHeader subhead"><h2>Setup / Energy Trends</h2></div>
+        <div id="setupInsights" class="feed compact"></div>
       </aside>
     </section>
 
@@ -230,17 +251,83 @@ p, span, td, th { color: var(--muted); }
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);
 }
-.metrics {
+.cockpit {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: 180px 96px 150px 280px;
+  align-items: stretch;
+  min-height: 128px;
+  justify-self: center;
+  width: min(100%, 840px);
 }
-.metrics div {
-  padding: 14px 16px;
+.cockpit > div {
   border-right: 1px solid var(--line);
+  padding: 14px 16px;
 }
-.metrics div:last-child { border-right: 0; }
-.metrics span { display: block; font-size: 12px; }
-.metrics strong { display: block; margin-top: 4px; font-size: 28px; letter-spacing: 0; }
+.cockpit > div:last-child { border-right: 0; }
+.cockpit span { display: block; font-size: 11px; text-transform: uppercase; color: var(--muted); }
+.speedBlock strong {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 62px;
+  line-height: .92;
+  letter-spacing: 0;
+}
+.speedBlock small { color: var(--muted); font-size: 13px; margin-left: 4px; }
+.gearBlock {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+.gearBlock strong {
+  display: block;
+  font-size: 72px;
+  line-height: .9;
+  letter-spacing: 0;
+}
+.stackBlock {
+  display: grid;
+  gap: 10px;
+}
+.stackBlock div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.stackBlock div:last-child { border-bottom: 0; }
+.stackBlock strong { font-size: 24px; letter-spacing: 0; }
+.pedals {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.pedal {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto 1fr auto;
+  gap: 7px 10px;
+  align-items: end;
+}
+.pedal span { grid-column: 1 / -1; }
+.pedal strong { font-size: 22px; letter-spacing: 0; }
+.bar {
+  height: 18px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  background: #091018;
+}
+.bar i {
+  display: block;
+  width: 0%;
+  height: 100%;
+  background: var(--green);
+  transition: width .12s linear;
+}
+.bar.brake i { background: var(--red); }
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) minmax(320px, .8fr);
@@ -250,6 +337,7 @@ p, span, td, th { color: var(--muted); }
 canvas { display: block; width: 100%; height: auto; background: #0b1117; }
 .mapPanel canvas { min-height: 420px; }
 .insights, .feed { padding: 12px; display: grid; gap: 10px; }
+.subhead { border-top: 1px solid var(--line); }
 .insight {
   border: 1px solid var(--line);
   border-left: 4px solid var(--amber);
@@ -260,12 +348,17 @@ canvas { display: block; width: 100%; height: auto; background: #0b1117; }
 .insight.high { border-left-color: var(--red); }
 .insight.low { border-left-color: var(--blue); }
 .insight strong { display: block; margin-bottom: 4px; }
+.insight span { display: block; line-height: 1.4; }
+.insight .evidence { color: var(--blue); margin-top: 7px; font-size: 12px; }
+.insight .recommendation { color: var(--text); margin-top: 7px; }
+.insight .setup { color: var(--amber); margin-top: 7px; font-size: 12px; }
 .feed div {
   padding: 9px 10px;
   border-radius: 6px;
   background: var(--panel-2);
   color: var(--text);
 }
+.feed.compact div { font-size: 13px; line-height: 1.4; }
 table { width: 100%; border-collapse: collapse; }
 th, td {
   padding: 10px 12px;
@@ -276,7 +369,9 @@ th, td {
 th { color: var(--text); font-weight: 600; }
 @media (max-width: 960px) {
   .topbar { align-items: flex-start; flex-direction: column; }
-  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cockpit { grid-template-columns: 1fr 100px; }
+  .cockpit > div { border-bottom: 1px solid var(--line); }
+  .pedals { grid-column: 1 / -1; }
   .layout, .bottom { grid-template-columns: 1fr; }
 }
 """
@@ -312,6 +407,7 @@ async function refresh() {
   const state = await response.json();
   renderMetrics(state);
   renderInsights(state.insights || []);
+  renderSetupInsights(state.setupInsights || []);
   renderLaps(state.completedLaps || []);
   renderFeed(state.notices || []);
   renderMap(state);
@@ -326,13 +422,15 @@ function renderMetrics(state) {
     ? `Track ${state.session.trackId}, ${state.session.trackLengthM} m`
     : "Waiting for session packet";
   document.getElementById("referenceStatus").textContent = state.reference
-    ? `${state.reference.name} ${state.reference.lapTime}`
+    ? `${state.reference.name} ${state.reference.lapTime}${state.reference.segments && state.reference.segments.length ? ` · ${state.reference.segments.length} loops` : ""}`
     : "No reference";
 
   document.getElementById("speed").textContent = sample ? `${sample.speedKmh}` : "--";
-  document.getElementById("gear").textContent = sample ? `${sample.gear}` : "--";
+  document.getElementById("gear").textContent = sample ? `${sample.gear}` : "-";
   document.getElementById("throttle").textContent = sample ? pct(sample.throttle) : "--";
   document.getElementById("brake").textContent = sample ? pct(sample.brake) : "--";
+  document.getElementById("throttleBar").style.width = sample ? pct(sample.throttle) : "0%";
+  document.getElementById("brakeBar").style.width = sample ? pct(sample.brake) : "0%";
   document.getElementById("ers").textContent = sample && sample.ersPercent !== null ? `${Math.round(sample.ersPercent)}%` : "--";
 
   let delta = "--";
@@ -353,7 +451,25 @@ function renderInsights(insights) {
   for (const item of insights) {
     const div = document.createElement("div");
     div.className = `insight ${item.severity}`;
-    div.innerHTML = `<strong>${item.category} · ${fmtMs(item.time_delta_ms)}</strong><span>${item.detail}</span>`;
+    const setup = item.setup_hint ? `<span class="setup">${item.setup_hint}</span>` : "";
+    const source = item.reference_source ? `<span class="evidence">${item.reference_source}</span>` : "";
+    div.innerHTML = `<strong>${item.category} · ${fmtMs(item.time_delta_ms)}</strong><span>${item.detail}</span>${source}<span class="evidence">${item.evidence}</span><span class="recommendation">${item.recommendation}</span>${setup}`;
+    target.appendChild(div);
+  }
+}
+
+function renderSetupInsights(items) {
+  const target = document.getElementById("setupInsights");
+  target.innerHTML = "";
+  if (!items.length) {
+    const div = document.createElement("div");
+    div.textContent = "No repeated setup or ERS trend detected yet.";
+    target.appendChild(div);
+    return;
+  }
+  for (const item of items) {
+    const div = document.createElement("div");
+    div.textContent = item;
     target.appendChild(div);
   }
 }

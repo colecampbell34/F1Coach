@@ -63,7 +63,9 @@ F1Coach uses the best available reference in this order:
 2. Generated `Ideal lap` from your own clean micro-sectors.
 3. Your personal best lap from the current session.
 
-The generated `Ideal lap` is the default target because it can be faster than your best single lap while still matching your exact assists, input device, setup habits, and driving level. It combines your best achieved segments rather than inventing impossible speed traces.
+The generated `Ideal lap` is the default target because it can be faster than your best single lap while still matching your exact assists, input device, setup habits, and driving level. It follows the same theoretical-best method used by F1 games: split the lap into timing loops, take the fastest clean loop from any lap in the session, then add those loops together.
+
+The public F1 24 UDP spec exposes lap history and best sector lap numbers, but not the game's private mini-sector loop boundaries or its already-calculated theoretical-best value. F1Coach therefore uses the same algorithm on its own fixed telemetry loops and preserves the source lap for each loop so analysis can explain which previous lap set the reference.
 
 External laps are useful, but assists matter. A no-assist wheel lap is often a poor direct target for a controller lap with medium traction control. If you import another driver's reference, include an `assistProfile` in the JSON so the dashboard can make the source clear.
 
