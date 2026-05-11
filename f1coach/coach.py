@@ -95,15 +95,38 @@ class SegmentInsight:
     reference_source: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class DynamicSegmentContext:
+    label: str
+    corner_index: int | None
+    phase: str
+    start_pct: float
+    end_pct: float
+    avg_speed_kmh: float
+    min_speed_kmh: int
+    avg_brake: float
+    avg_throttle: float
+    avg_steer: float
+    speed_change_kmh: int
+    elevation_change_m: float | None
+    avg_slip_ratio: float | None
+    ers_used_kj: float | None
+    straight_after: bool
+
+
 class LapCoach:
     def __init__(
         self,
         sample_buckets: int = 240,
         external_reference: ReferenceProfile | None = None,
         theoretical_loop_count: int = 60,
+        driving_goal: str = "qualifying",
+        corner_metadata: Any | None = None,
     ) -> None:
         self.sample_buckets = sample_buckets
         self.theoretical_loop_count = theoretical_loop_count
+        self.driving_goal = self._normalize_driving_goal(driving_goal)
+        self.corner_metadata = corner_metadata
         self.track_length_m: int | None = None
         self.track_id: int | None = None
         self.latest_telemetry: CarTelemetrySnapshot | None = None
@@ -124,6 +147,14 @@ class LapCoach:
         self.latest_setup_suggestions: list[str] = []
         self.notices: list[str] = []
         self.last_hint_at = 0.0
+
+    def set_driving_goal(self, goal: str) -> list[str]:
+        normalized = self._normalize_driving_goal(goal)
+        if normalized == self.driving_goal:
+            return []
+        self.driving_goal = normalized
+        label = "qualifying laps" if normalized == "qualifying" else "race pace"
+        return [f"Coaching goal set to {label}."]
 
     def start_new_session(
         self,
@@ -149,6 +180,7 @@ class LapCoach:
         self.latest_insights = []
         self.latest_setup_suggestions = []
         self.last_hint_at = 0.0
+        self._begin_corner_metadata_load()
         return [reason]
 
     def update(self, message: TelemetryMessage) -> list[str]:
@@ -199,6 +231,7 @@ class LapCoach:
             notices.append(
                 f"Session detected: track {message.track_id}, {message.track_length_m} m, {message.total_laps} laps."
             )
+        self._begin_corner_metadata_load()
         return notices
 
     def _update_lap(self, lap: LapSnapshot) -> list[str]:
@@ -348,6 +381,9 @@ class LapCoach:
             )
 
         if hint is not None:
+            dynamic_hint = self._live_dynamic_hint(sample, hint)
+            if dynamic_hint:
+                hint = f"{hint} {dynamic_hint}"
             self.last_hint_at = now
         return hint
 
@@ -430,6 +466,7 @@ class LapCoach:
                     lap_segment,
                     ref_segment,
                     self._reference_source_for(reference, start, end),
+                    reference.samples,
                 )
             )
 
@@ -527,6 +564,7 @@ class LapCoach:
         lap_segment: list[LapSample],
         ref_segment: list[LapSample],
         reference_source: str | None = None,
+        reference_samples: list[LapSample] | None = None,
     ) -> SegmentInsight:
         avg_speed_delta = self._avg(sample.speed_kmh for sample in lap_segment) - self._avg(
             sample.speed_kmh for sample in ref_segment
@@ -553,7 +591,8 @@ class LapCoach:
         avg_steer = self._avg(abs(sample.steer) for sample in lap_segment)
 
         severity = "high" if delta_ms >= 250 else "medium" if delta_ms >= 120 else "low"
-        area = self._area_range(start, end)
+        context = self._dynamic_segment_context(start, end, lap_segment, ref_segment, reference_samples)
+        area = context.label
         speed_loss = abs(avg_speed_delta)
         evidence_parts = [
             f"{delta_ms / 1000:.2f}s lost",
@@ -649,6 +688,13 @@ class LapCoach:
             recommendation = "Compare the speed trace shape here first; the loss is broad rather than one clear input mistake."
             setup_hint = None
 
+        recommendation = self._with_dynamic_advice(recommendation, category, context)
+        dynamic_setup_hint = self._dynamic_setup_hint(category, context)
+        if setup_hint is None:
+            setup_hint = dynamic_setup_hint
+        elif dynamic_setup_hint is not None and category in {"braking", "traction", "steering"}:
+            setup_hint = f"{setup_hint} {dynamic_setup_hint}"
+
         return SegmentInsight(
             area=area,
             start_pct=start * 100,
@@ -739,6 +785,15 @@ class LapCoach:
                 "Energy trend: ERS is being held through exits where acceleration is available. Shift deployment to corner exits that lead "
                 "onto longer full-throttle sections, then conserve in short bursts before braking zones."
             )
+        suggestions.extend(self._dynamic_setup_suggestions(insights, lap, reference))
+        if self.driving_goal == "race" and suggestions:
+            suggestions.append(
+                "Race pace goal: favor the setup or technique change that stays repeatable over tyre life, not the one-lap fix that adds snaps or lockups."
+            )
+        elif self.driving_goal == "qualifying" and suggestions:
+            suggestions.append(
+                "Qualifying goal: prioritize the change that improves the highest-loss corner exit and lets you deploy earlier on the next straight."
+            )
         return suggestions[:3]
 
     def _reference_source_for(self, reference: ReferenceProfile, start: float, end: float) -> str | None:
@@ -828,6 +883,8 @@ class LapCoach:
                 "trackId": self.track_id,
                 "trackLengthM": self.track_length_m,
             },
+            "cornerMetadata": self._corner_metadata_status(),
+            "drivingGoal": self.driving_goal,
             "current": {
                 "lapNum": self.active_lap_num,
                 "invalid": self.active_invalid,
@@ -846,6 +903,19 @@ class LapCoach:
         if notices:
             self.notices.extend(notices)
             self.notices = self.notices[-50:]
+
+    def _corner_metadata_status(self) -> dict[str, Any]:
+        metadata_fn = getattr(self.corner_metadata, "metadata", None)
+        error_fn = getattr(self.corner_metadata, "error", None)
+        metadata = metadata_fn(self.track_id) if metadata_fn is not None else None
+        error = error_fn(self.track_id) if error_fn is not None else None
+        return {
+            "available": metadata is not None,
+            "source": "FastF1" if metadata is not None else None,
+            "eventName": getattr(metadata, "event_name", None),
+            "cornerCount": len(getattr(metadata, "corners", ()) or ()),
+            "error": error,
+        }
 
     def _lap_summary(self, lap: CompletedLap) -> dict[str, Any]:
         return {
@@ -904,14 +974,293 @@ class LapCoach:
         collected = list(values)
         return sum(collected) / len(collected) if collected else 0.0
 
-    @staticmethod
-    def _area_name(normalized_distance: float) -> str:
+    def _area_name(self, normalized_distance: float) -> str:
+        reference = self.reference_profile()
+        official_label = self._official_corner_label(normalized_distance)
+        if official_label is not None:
+            return f"{official_label} ({normalized_distance * 100:.1f}% lap)"
+        corner_index = self._corner_index_at(normalized_distance, reference.samples if reference else self.active_samples)
+        if corner_index is not None:
+            return f"Corner {corner_index} ({normalized_distance * 100:.1f}% lap)"
         pct = normalized_distance * 100
         return f"Track zone {int(pct // 3.333) + 1} ({pct:.1f}% lap)"
 
-    @staticmethod
-    def _area_range(start: float, end: float) -> str:
+    def _area_range(self, start: float, end: float) -> str:
+        reference = self.reference_profile()
+        samples = reference.samples if reference else self.active_samples
+        context = self._dynamic_segment_context(start, end, [], [], samples)
+        if context.corner_index is not None:
+            return context.label
         return f"Zone {int(start * 30) + 1} ({start * 100:.0f}-{end * 100:.0f}% lap)"
+
+    def _dynamic_segment_context(
+        self,
+        start: float,
+        end: float,
+        lap_segment: list[LapSample],
+        ref_segment: list[LapSample],
+        reference_samples: list[LapSample] | None = None,
+    ) -> DynamicSegmentContext:
+        samples = ref_segment or lap_segment
+        reference_samples = reference_samples or ref_segment or lap_segment
+        midpoint = (start + end) / 2
+        corner_index = self._corner_index_at(midpoint, reference_samples)
+        official_label = self._official_corner_label(midpoint)
+        avg_speed = self._avg(sample.speed_kmh for sample in samples)
+        min_speed = min((sample.speed_kmh for sample in samples), default=0)
+        avg_brake = self._avg(sample.brake for sample in samples)
+        avg_throttle = self._avg(sample.throttle for sample in samples)
+        avg_steer = self._avg(abs(sample.steer) for sample in samples)
+        speed_change = samples[-1].speed_kmh - samples[0].speed_kmh if len(samples) >= 2 else 0
+        elevation_change = self._elevation_change(samples)
+        slip_values = [sample.avg_slip_ratio for sample in lap_segment if sample.avg_slip_ratio is not None]
+        avg_slip = self._avg(slip_values) if slip_values else None
+        ers_used = self._ers_used(lap_segment)
+        ers_used_kj = ers_used / 1000 if ers_used is not None else None
+        straight_after = self._has_straight_after(end, reference_samples)
+
+        if avg_brake > 0.18 or speed_change < -22:
+            phase = "entry"
+        elif avg_throttle > 0.58 and speed_change > 14:
+            phase = "exit"
+        elif avg_steer > 0.18:
+            phase = "mid-corner"
+        elif straight_after and avg_throttle > 0.75:
+            phase = "straight"
+        else:
+            phase = "transition"
+
+        corner_label = official_label or (f"Corner {corner_index}" if corner_index is not None else None)
+        if corner_label is not None:
+            label = f"{corner_label} {phase}" if phase != "straight" else f"Straight after {corner_label}"
+        else:
+            label = f"Zone {int(start * 30) + 1} {phase} ({start * 100:.0f}-{end * 100:.0f}% lap)"
+
+        return DynamicSegmentContext(
+            label=label,
+            corner_index=corner_index,
+            phase=phase,
+            start_pct=start * 100,
+            end_pct=end * 100,
+            avg_speed_kmh=avg_speed,
+            min_speed_kmh=min_speed,
+            avg_brake=avg_brake,
+            avg_throttle=avg_throttle,
+            avg_steer=avg_steer,
+            speed_change_kmh=speed_change,
+            elevation_change_m=elevation_change,
+            avg_slip_ratio=avg_slip,
+            ers_used_kj=ers_used_kj,
+            straight_after=straight_after,
+        )
+
+    def _with_dynamic_advice(self, recommendation: str, category: str, context: DynamicSegmentContext) -> str:
+        cues: list[str] = []
+        downhill = context.elevation_change_m is not None and context.elevation_change_m < -0.5
+        uphill = context.elevation_change_m is not None and context.elevation_change_m > 0.5
+        low_grip = context.avg_slip_ratio is not None and context.avg_slip_ratio > 0.24
+
+        if category in {"braking", "under-braking"}:
+            if downhill:
+                cues.append("brake a touch earlier for the downhill load change, then release more gently in the final phase")
+            elif uphill:
+                cues.append("use the uphill braking grip for a firm initial hit, but still finish the release before peak steering")
+            elif context.avg_steer > 0.22:
+                cues.append("separate the peak brake pressure from the first big steering input")
+            else:
+                cues.append("keep the peak brake hit straight, then shorten the trail-brake phase")
+            if self.driving_goal == "qualifying":
+                cues.append("once the car rotates cleanly, try carrying a little more entry speed instead of simply braking later")
+            else:
+                cues.append("for race pace, bias this toward no lockups and a repeatable release point")
+        elif category == "minimum-speed":
+            cues.append("try carrying more speed through the slowest point, but only if the exit throttle trace stays clean")
+            if context.phase == "entry":
+                cues.append("release the final brake pressure earlier so the car rolls to apex instead of stopping at it")
+        elif category == "steering":
+            cues.append("take a straighter line out with smoother steering unwind; avoid adding lock after the apex")
+            if context.avg_speed_kmh > 180:
+                cues.append("at this speed, one small correction costs more than a slightly calmer entry")
+        elif category in {"throttle", "traction"}:
+            if low_grip:
+                cues.append("treat the first throttle ramp as grip-limited: squeeze it against steering unwind and consider a short shift")
+            else:
+                cues.append("open the steering earlier so throttle can build without asking the rear tyre for rotation and drive at the same time")
+            if context.straight_after:
+                cues.append("prioritize the exit because it feeds a full-throttle section")
+        elif category == "ERS deployment":
+            if context.straight_after:
+                cues.append("deploy more battery as soon as the wheel is opening on exit; this is a better spend zone than the braking phase")
+            else:
+                cues.append("delay deployment until the car is straighter so the battery goes into acceleration instead of wheelspin")
+        elif category == "ERS waste":
+            cues.append("save that battery through the brake/partial-throttle part and spend it after rotation on the next clean exit")
+        else:
+            if context.phase == "entry":
+                cues.append("compare whether the loss starts from brake release or entry speed before changing setup")
+            elif context.phase == "exit":
+                cues.append("look for a straighter exit line and earlier steering unwind before chasing more throttle")
+            else:
+                cues.append("use the trace shape to decide whether this is entry speed, mid-corner scrub, or exit commitment")
+
+        if not cues:
+            return recommendation
+        return f"{recommendation} Try this: {'; '.join(cues[:3])}."
+
+    def _live_dynamic_hint(self, sample: LapSample, hint: str) -> str | None:
+        reference = self.reference_profile()
+        context = self._dynamic_segment_context(
+            max(0.0, sample.normalized_distance - 0.015),
+            min(0.999, sample.normalized_distance + 0.015),
+            [sample],
+            [],
+            reference.samples if reference else self.active_samples,
+        )
+        if context.corner_index is None:
+            return None
+        if "braking" in hint or sample.brake > 0.20:
+            return "Try this: keep peak brake straighter, then release before adding more steering."
+        if "traction" in hint or sample.throttle > 0.60:
+            return "Try this: unwind steering first, then build throttle and ERS once the car is straightening."
+        if abs(sample.steer) > 0.20:
+            return "Try this: reduce the second steering input and let the car take a cleaner arc."
+        return None
+
+    def _dynamic_setup_hint(self, category: str, context: DynamicSegmentContext) -> str | None:
+        downhill = context.elevation_change_m is not None and context.elevation_change_m < -0.5
+        low_grip = context.avg_slip_ratio is not None and context.avg_slip_ratio > 0.26
+        if category in {"braking", "under-braking"}:
+            if downhill:
+                return "If front locking repeats here, try one click rearward brake bias; if the rear moves on release, restore forward bias and soften the pedal release."
+            return "Repeated locking here points first to brake-bias or release timing, not wing level."
+        if category in {"traction", "throttle"} and low_grip:
+            return "If this repeats with clean steering, test lower on-throttle diff or a slightly softer rear platform."
+        if category == "steering" and context.avg_speed_kmh > 150:
+            return "If the line is already clean, repeated steering scrub can justify more front support or lower front tyre pressure."
+        return None
+
+    def _dynamic_setup_suggestions(
+        self,
+        insights: list[SegmentInsight],
+        lap: CompletedLap,
+        reference: ReferenceProfile,
+    ) -> list[str]:
+        suggestions: list[str] = []
+        seen: set[str] = set()
+        for insight in insights[:4]:
+            lap_segment = self._samples_between(lap.samples, insight.start_pct / 100, insight.end_pct / 100)
+            ref_segment = self._samples_between(reference.samples, insight.start_pct / 100, insight.end_pct / 100)
+            context = self._dynamic_segment_context(
+                insight.start_pct / 100,
+                insight.end_pct / 100,
+                lap_segment,
+                ref_segment,
+                reference.samples,
+            )
+            hint = self._dynamic_setup_hint(insight.category, context)
+            if hint is None or context.label in seen:
+                continue
+            suggestions.append(f"{context.label}: {hint}")
+            seen.add(context.label)
+        return suggestions[:2]
+
+    def _corner_index_at(self, normalized_distance: float, samples: list[LapSample]) -> int | None:
+        windows = self._dynamic_corner_windows(samples)
+        if not windows:
+            return None
+        for index, (start, end) in enumerate(windows, start=1):
+            if start <= normalized_distance <= end:
+                return index
+        nearest: tuple[float, int] | None = None
+        for index, (start, end) in enumerate(windows, start=1):
+            distance = min(abs(normalized_distance - start), abs(normalized_distance - end))
+            if distance <= 0.025 and (nearest is None or distance < nearest[0]):
+                nearest = (distance, index)
+        return nearest[1] if nearest is not None else None
+
+    def _dynamic_corner_windows(self, samples: list[LapSample]) -> list[tuple[float, float]]:
+        ordered = sorted(samples, key=lambda sample: sample.normalized_distance)
+        if len(ordered) < 2:
+            return []
+        groups: list[list[LapSample]] = []
+        current: list[LapSample] = []
+        previous_distance: float | None = None
+        for sample in ordered:
+            active = (
+                sample.brake > 0.08
+                or abs(sample.steer) > 0.15
+                or (sample.speed_kmh < 210 and sample.throttle < 0.96)
+            )
+            if not active:
+                if current:
+                    groups.append(current)
+                    current = []
+                previous_distance = sample.normalized_distance
+                continue
+            if current and previous_distance is not None and sample.normalized_distance - previous_distance > 0.035:
+                groups.append(current)
+                current = []
+            current.append(sample)
+            previous_distance = sample.normalized_distance
+        if current:
+            groups.append(current)
+
+        windows: list[tuple[float, float]] = []
+        for group in groups:
+            start = max(0.0, group[0].normalized_distance - 0.008)
+            end = min(0.999, group[-1].normalized_distance + 0.008)
+            max_steer = max(abs(sample.steer) for sample in group)
+            max_brake = max(sample.brake for sample in group)
+            min_speed = min(sample.speed_kmh for sample in group)
+            if end - start < 0.010 and max_brake < 0.18 and max_steer < 0.22 and min_speed > 170:
+                continue
+            if windows and start - windows[-1][1] < 0.018:
+                windows[-1] = (windows[-1][0], max(windows[-1][1], end))
+            else:
+                windows.append((start, end))
+        return windows
+
+    def _has_straight_after(self, normalized_distance: float, samples: list[LapSample]) -> bool:
+        after = [
+            sample
+            for sample in samples
+            if normalized_distance < sample.normalized_distance <= min(0.999, normalized_distance + 0.08)
+        ]
+        if len(after) < 3:
+            return False
+        avg_throttle = self._avg(sample.throttle for sample in after)
+        avg_brake = self._avg(sample.brake for sample in after)
+        speed_gain = after[-1].speed_kmh - after[0].speed_kmh
+        avg_steer = self._avg(abs(sample.steer) for sample in after)
+        return avg_throttle > 0.75 and avg_brake < 0.08 and speed_gain > 20 and avg_steer < 0.16
+
+    @staticmethod
+    def _elevation_change(samples: list[LapSample]) -> float | None:
+        positions = [sample.world_position for sample in samples if sample.world_position is not None]
+        if len(positions) < 2:
+            return None
+        return positions[-1][1] - positions[0][1]
+
+    def _begin_corner_metadata_load(self) -> None:
+        begin_load = getattr(self.corner_metadata, "begin_load", None)
+        if begin_load is None:
+            return
+        begin_load(self.track_id, self.track_length_m)
+
+    def _official_corner_label(self, normalized_distance: float) -> str | None:
+        corner_label = getattr(self.corner_metadata, "corner_label", None)
+        if corner_label is None:
+            return None
+        return corner_label(self.track_id, normalized_distance, self.track_length_m)
+
+    @staticmethod
+    def _normalize_driving_goal(goal: str) -> str:
+        normalized = goal.strip().lower().replace("_", "-")
+        if normalized in {"qualifying", "quali", "hotlap", "hot-lap", "time-trial"}:
+            return "qualifying"
+        if normalized in {"race", "race-pace", "stint", "long-run", "longrun"}:
+            return "race"
+        raise ValueError("Driving goal must be 'qualifying' or 'race'.")
 
     @staticmethod
     def _format_ms(milliseconds: int) -> str:

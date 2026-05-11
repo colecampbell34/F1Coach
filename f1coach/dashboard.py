@@ -11,12 +11,13 @@ from typing import Any
 from f1coach.adapters import F124Adapter, UnsupportedPacket
 from f1coach.coach import LapCoach, ReferenceProfile
 from f1coach.models import PacketId
+from f1coach.track_metadata import FastF1CornerMetadata
 
 
 class TelemetryRuntime:
     def __init__(self, reference: ReferenceProfile | None = None) -> None:
         self.adapter = F124Adapter()
-        self.coach = LapCoach(external_reference=reference)
+        self.coach = LapCoach(external_reference=reference, corner_metadata=FastF1CornerMetadata())
         self.packet_counts: Counter[str] = Counter()
         self.paused_packet_counts: Counter[str] = Counter()
         self.last_sender: tuple[str, int] | None = None
@@ -70,6 +71,12 @@ class TelemetryRuntime:
             notices = self.coach.start_new_session("Manual new session started.")
             self.coach._record_notices(notices)
             self.paused_packet_counts.clear()
+            return self._snapshot_unlocked()
+
+    def set_driving_goal(self, goal: str) -> dict[str, Any]:
+        with self.lock:
+            notices = self.coach.set_driving_goal(goal)
+            self.coach._record_notices(notices)
             return self._snapshot_unlocked()
 
     def _snapshot_unlocked(self) -> dict[str, Any]:
@@ -135,6 +142,14 @@ def serve_dashboard(runtime: TelemetryRuntime, host: str, port: int) -> Threadin
                 self._send("application/json; charset=utf-8", json.dumps(runtime.resume()))
             elif action == "new-session":
                 self._send("application/json; charset=utf-8", json.dumps(runtime.start_new_session()))
+            elif action == "set-goal":
+                goal = str(body.get("goal", ""))
+                try:
+                    state = runtime.set_driving_goal(goal)
+                except ValueError as exc:
+                    self.send_error(400, str(exc))
+                    return
+                self._send("application/json; charset=utf-8", json.dumps(state))
             else:
                 self.send_error(400, "Unknown control action")
 
@@ -175,6 +190,10 @@ INDEX_HTML = """<!doctype html>
       <p id="sessionLine">Waiting for telemetry</p>
     </div>
     <div class="status">
+      <div class="goalToggle" role="group" aria-label="Coaching goal">
+        <button data-goal="qualifying" type="button">Qualifying</button>
+        <button data-goal="race" type="button">Race Pace</button>
+      </div>
       <button id="pauseButton" type="button">Pause Listening</button>
       <button id="newSessionButton" type="button">New Session</button>
       <span id="packetStatus">0 packets</span>
@@ -288,6 +307,13 @@ h1 { font-size: 24px; letter-spacing: 0; }
 h2 { font-size: 15px; letter-spacing: 0; }
 p, span, td, th { color: var(--muted); }
 .status { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.goalToggle {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #091018;
+}
 .status span,
 .status button {
   padding: 7px 10px;
@@ -307,6 +333,14 @@ p, span, td, th { color: var(--muted); }
 .status button.active {
   border-color: var(--amber);
   color: var(--amber);
+}
+.goalToggle button {
+  border-color: transparent;
+  background: transparent;
+  border-radius: 6px;
+}
+.goalToggle button.active {
+  background: var(--panel-2);
 }
 .shell { padding: 18px; display: grid; gap: 18px; }
 .panel {
@@ -455,8 +489,15 @@ const mapCanvas = document.getElementById("trackMap");
 const traceCanvas = document.getElementById("trace");
 const pauseButton = document.getElementById("pauseButton");
 const newSessionButton = document.getElementById("newSessionButton");
+const goalButtons = Array.from(document.querySelectorAll("[data-goal]"));
 
 function initControls() {
+  goalButtons.forEach(button => {
+    button.addEventListener("click", async () => {
+      await sendControl("set-goal", { goal: button.dataset.goal });
+      await refresh();
+    });
+  });
   pauseButton.addEventListener("click", async () => {
     const paused = pauseButton.dataset.paused === "true";
     await sendControl(paused ? "resume" : "pause");
@@ -470,11 +511,11 @@ function initControls() {
   });
 }
 
-async function sendControl(action) {
+async function sendControl(action, payload = {}) {
   const response = await fetch("/control", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action }),
+    body: JSON.stringify({ action, ...payload }),
   });
   if (!response.ok) {
     throw new Error(`Control action failed: ${action}`);
@@ -520,8 +561,13 @@ function renderMetrics(state) {
   pauseButton.dataset.paused = state.paused ? "true" : "false";
   pauseButton.textContent = state.paused ? "Resume Listening" : "Pause Listening";
   pauseButton.classList.toggle("active", Boolean(state.paused));
+  goalButtons.forEach(button => {
+    button.classList.toggle("active", button.dataset.goal === state.drivingGoal);
+  });
+  const trackLabel = state.session.trackId !== null && state.session.trackId !== undefined ? `Track ${state.session.trackId}` : "Track";
+  const goalLabel = state.drivingGoal === "race" ? "race pace" : "qualifying";
   document.getElementById("sessionLine").textContent = state.session.trackLengthM
-    ? `Track ${state.session.trackId}, ${state.session.trackLengthM} m${state.paused ? " · paused" : ""}`
+    ? `${trackLabel}, ${state.session.trackLengthM} m · ${goalLabel}${state.paused ? " · paused" : ""}`
     : "Waiting for session packet";
   document.getElementById("referenceStatus").textContent = state.reference
     ? `${state.reference.name} ${state.reference.lapTime}${state.reference.segments && state.reference.segments.length ? ` · ${state.reference.segments.length} loops` : ""}`

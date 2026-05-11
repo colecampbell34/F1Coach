@@ -76,9 +76,14 @@ The practical options are:
 
 - `Pause` stops recording/analyzing incoming UDP packets without clearing the current session. Existing laps, the track map, the ideal lap, and analysis stay visible.
 - `Resume` continues recording new packets into the same session.
+- `Qualifying` / `Race Pace` changes the coaching goal. Qualifying advice is more aggressive about peak lap time and ERS spend; race-pace advice favors repeatable braking, tyre life, and battery use for attack/defense.
 - `New Session` clears the current session when you switch tracks or want a fresh reference.
 
 F1Coach also resets automatically when a session packet reports a different track ID or track length.
+
+The coach dynamically detects corner entry, mid-corner, exit, and straight zones from the lap/reference telemetry instead of relying on a hard-coded corner list. Loss reports can call out patterns such as downhill braking, steering overlap, low-grip exits, high-speed scrub, brake-bias direction, throttle shape, and ERS deployment priorities at any point on any track.
+
+If FastF1 is installed, the dashboard runtime also tries to load FastF1 circuit markers in the background and use official turn labels such as `T5 entry` or `T8 exit` when they line up with the live lap distance. The driving diagnosis still comes from your telemetry, so missing or unavailable FastF1 data simply falls back to dynamic `Corner 5 entry` labels.
 
 ## Terminal-Only Mode
 

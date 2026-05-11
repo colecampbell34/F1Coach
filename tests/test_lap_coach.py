@@ -6,6 +6,30 @@ from f1coach.coach import CompletedLap, LapCoach, LapSample, ReferenceProfile
 from f1coach.models import CarTelemetrySnapshot, LapSnapshot, PacketHeader, SessionInfo
 
 
+class FakeCornerMetadata:
+    def __init__(self) -> None:
+        self.loaded: list[tuple[int | None, int | None]] = []
+
+    def begin_load(self, track_id: int | None, track_length_m: int | None) -> None:
+        self.loaded.append((track_id, track_length_m))
+
+    def corner_label(
+        self,
+        track_id: int | None,
+        normalized_distance: float,
+        track_length_m: int | None,
+    ) -> str | None:
+        if track_id == 3 and track_length_m == 5000 and 0.28 <= normalized_distance <= 0.34:
+            return "T10"
+        return None
+
+    def metadata(self, track_id: int | None) -> None:
+        return None
+
+    def error(self, track_id: int | None) -> None:
+        return None
+
+
 class LapCoachTests(unittest.TestCase):
     def setUp(self) -> None:
         self.header = PacketHeader(2024, 24, 1, 18, 1, 2, 1, 0.0, 1, 1, 0, 255)
@@ -154,6 +178,64 @@ class LapCoachTests(unittest.TestCase):
         suggestions = coach._setup_suggestions(lap, reference)
 
         self.assertTrue(any("exit traction" in suggestion for suggestion in suggestions))
+
+    def test_dynamic_context_adds_corner_specific_advice(self) -> None:
+        coach = LapCoach(sample_buckets=30)
+        lap_samples = [
+            self._sample(10_000, 0.30, 180, 0.05, 0.72),
+            self._sample(11_050, 0.32, 95, 0.10, 0.58),
+        ]
+        ref_samples = [
+            self._sample(10_000, 0.30, 190, 0.05, 0.52),
+            self._sample(10_550, 0.32, 112, 0.12, 0.35),
+        ]
+        lap = CompletedLap(6, 80_000, 25_000, 27_000, False, lap_samples)
+        reference = ReferenceProfile("Imported", "test", 79_000, 24_500, 26_800, ref_samples)
+
+        insights = coach.analyze_lap(lap, reference)
+
+        self.assertTrue(any("Corner 1" in insight.area for insight in insights))
+        self.assertFalse(any("Bahrain" in insight.area for insight in insights))
+        self.assertTrue(any("carrying a little more entry speed" in insight.recommendation for insight in insights))
+
+    def test_fastf1_metadata_can_enrich_dynamic_corner_labels(self) -> None:
+        metadata = FakeCornerMetadata()
+        coach = LapCoach(sample_buckets=30, corner_metadata=metadata)
+        coach.update(SessionInfo(self.header, 5000, 3, 10, 3, 0, 22, 30))
+        lap_samples = [
+            self._sample(10_000, 0.30, 180, 0.05, 0.72),
+            self._sample(11_050, 0.32, 95, 0.10, 0.58),
+        ]
+        ref_samples = [
+            self._sample(10_000, 0.30, 190, 0.05, 0.52),
+            self._sample(10_550, 0.32, 112, 0.12, 0.35),
+        ]
+        lap = CompletedLap(6, 80_000, 25_000, 27_000, False, lap_samples)
+        reference = ReferenceProfile("Imported", "test", 79_000, 24_500, 26_800, ref_samples)
+
+        insights = coach.analyze_lap(lap, reference)
+
+        self.assertIn((3, 5000), metadata.loaded)
+        self.assertTrue(any("T10 entry" in insight.area for insight in insights))
+
+    def test_race_goal_changes_track_specific_advice(self) -> None:
+        coach = LapCoach(sample_buckets=30, driving_goal="race")
+        lap_samples = [
+            self._sample(10_000, 0.36, 205, 0.05, 0.70),
+            self._sample(10_900, 0.40, 112, 0.08, 0.55),
+        ]
+        ref_samples = [
+            self._sample(10_000, 0.36, 210, 0.05, 0.48),
+            self._sample(10_450, 0.40, 128, 0.10, 0.34),
+        ]
+        lap = CompletedLap(7, 80_000, 25_000, 27_000, False, lap_samples)
+        reference = ReferenceProfile("Imported", "test", 79_000, 24_500, 26_800, ref_samples)
+
+        insights = coach.analyze_lap(lap, reference)
+
+        self.assertTrue(any("Corner 1" in insight.area for insight in insights))
+        self.assertFalse(any("Austria" in insight.area for insight in insights))
+        self.assertTrue(any("race pace" in insight.recommendation for insight in insights))
 
     def _telemetry(self, speed: int, throttle: float, brake: float) -> CarTelemetrySnapshot:
         return CarTelemetrySnapshot(

@@ -26,6 +26,14 @@ class TelemetryRuntimeTests(unittest.TestCase):
         self.assertEqual(state["pausedPackets"], {})
         self.assertIn("Manual new session started.", state["notices"])
 
+    def test_set_driving_goal_updates_snapshot(self) -> None:
+        runtime = TelemetryRuntime()
+
+        state = runtime.set_driving_goal("race")
+
+        self.assertEqual(state["drivingGoal"], "race")
+        self.assertIn("Coaching goal set to race pace.", state["notices"])
+
 
 if __name__ == "__main__":
     unittest.main()
