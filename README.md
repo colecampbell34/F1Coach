@@ -15,7 +15,7 @@ F1Coach is a small Python app that listens to live UDP telemetry from F1 24 and 
 
 ## PS4 F1 24 Setup
 
-In F1 24 on PS4:
+In F1 24:
 
 1. Open `Settings -> Telemetry Settings`.
 2. Set `UDP Telemetry` to `ON`.
@@ -24,14 +24,28 @@ In F1 24 on PS4:
 5. Set `UDP Send Rate` to `60Hz`.
 6. Set `UDP Format` to `2024`.
 
-Your PS4 and laptop must be on the same Wi-Fi/router.
+Your console and laptop must be on the same Wi-Fi/router.
 
-## Run Locally
+## Easiest Download And Run
+
+1. Install Python 3.10 or newer from https://www.python.org/downloads/.
+2. Download this project from GitHub as a ZIP and unzip it.
+3. Start F1Coach from the unzipped folder:
+   - macOS: double-click `run_f1coach.command`.
+   - Windows: double-click `run_f1coach.bat`.
+   - Linux: run `./run_f1coach.sh`.
+4. The dashboard opens at `http://127.0.0.1:8765`.
+
+Keep the launcher window open while using the dashboard. Close it with `Ctrl+C` when you are done.
+
+If macOS blocks the launcher, right-click `run_f1coach.command`, choose `Open`, then approve it. If Windows asks about firewall access for Python, allow it on private networks so the game packets can reach the app.
+
+## Run From Terminal
 
 Use Python 3.10 or newer.
 
 ```bash
-python3 -m f1coach dashboard --port 20777
+python3 -m f1coach dashboard --port 20777 --open-browser
 ```
 
 Open:
@@ -44,10 +58,27 @@ Or install it in editable mode:
 
 ```bash
 python3 -m pip install -e .
-f1coach --port 20777
+f1coach dashboard --port 20777 --open-browser
 ```
 
 When you start driving, the app prints packet status, lap completions, and coaching messages. The dashboard updates every half second.
+
+## Deployment Model
+
+This app cannot run as a telemetry receiver on Vercel by itself. F1 games send UDP broadcast packets on your local network, and Vercel runs in the cloud, outside the user's router/LAN. A browser tab opened from Vercel also cannot bind to UDP port `20777`.
+
+The practical options are:
+
+- Run F1Coach locally on the same Wi-Fi/router as the console or PC running the game.
+- Later, split the project into a local telemetry bridge plus a hosted dashboard. The local bridge would receive UDP and stream normalized telemetry to the web app.
+
+## Dashboard Controls
+
+- `Pause` stops recording/analyzing incoming UDP packets without clearing the current session. Existing laps, the track map, the ideal lap, and analysis stay visible.
+- `Resume` continues recording new packets into the same session.
+- `New Session` clears the current session when you switch tracks or want a fresh reference.
+
+F1Coach also resets automatically when a session packet reports a different track ID or track length.
 
 ## Terminal-Only Mode
 
@@ -119,7 +150,7 @@ python3 -m f1coach dashboard --reference path/to/reference.json
 - Keep `UDP Broadcast Mode` enabled for the simplest setup.
 - Make sure no other app is already bound to port `20777`.
 - On macOS or Windows, allow Python through the firewall if prompted.
-- If `python` does not work, use `python3 -m f1coach dashboard --port 20777`.
+- If `python` does not work, use `python3 -m f1coach dashboard --port 20777 --open-browser`.
 - If the dashboard has gauges but no track map, confirm F1 24 is sending motion packets and you are on track.
 - If the dashboard loads but packet count stays at zero, use `--show-packets` and check firewall permissions.
 

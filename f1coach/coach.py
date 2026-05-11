@@ -125,6 +125,32 @@ class LapCoach:
         self.notices: list[str] = []
         self.last_hint_at = 0.0
 
+    def start_new_session(
+        self,
+        reason: str = "New session started.",
+        track_id: int | None = None,
+        track_length_m: int | None = None,
+    ) -> list[str]:
+        self.track_length_m = track_length_m
+        self.track_id = track_id
+        self.latest_telemetry = None
+        self.latest_status = None
+        self.latest_motion = None
+        self.latest_motion_ex = None
+        self.active_lap_num = None
+        self.active_invalid = False
+        self.active_sector1_time_ms = 0
+        self.active_sector2_time_ms = 0
+        self.active_samples = []
+        self.best_lap = None
+        self.clean_laps = []
+        self.ideal_reference = None
+        self.completed_laps = []
+        self.latest_insights = []
+        self.latest_setup_suggestions = []
+        self.last_hint_at = 0.0
+        return [reason]
+
     def update(self, message: TelemetryMessage) -> list[str]:
         if isinstance(message, SessionInfo):
             notices = self._update_session(message)
@@ -150,9 +176,26 @@ class LapCoach:
 
     def _update_session(self, message: SessionInfo) -> list[str]:
         notices: list[str] = []
+        track_changed = (
+            self.track_length_m is not None
+            and message.track_length_m > 0
+            and (message.track_length_m != self.track_length_m or message.track_id != self.track_id)
+        )
+        if track_changed:
+            notices.extend(
+                self.start_new_session(
+                    reason=f"New track detected: reset session for track {message.track_id}.",
+                    track_id=message.track_id,
+                    track_length_m=message.track_length_m,
+                )
+            )
         if message.track_length_m > 0 and message.track_length_m != self.track_length_m:
             self.track_length_m = message.track_length_m
             self.track_id = message.track_id
+            notices.append(
+                f"Session detected: track {message.track_id}, {message.track_length_m} m, {message.total_laps} laps."
+            )
+        elif track_changed:
             notices.append(
                 f"Session detected: track {message.track_id}, {message.track_length_m} m, {message.total_laps} laps."
             )

@@ -18,14 +18,15 @@ class TelemetryRuntime:
         self.adapter = F124Adapter()
         self.coach = LapCoach(external_reference=reference)
         self.packet_counts: Counter[str] = Counter()
+        self.paused_packet_counts: Counter[str] = Counter()
         self.last_sender: tuple[str, int] | None = None
+        self.paused = False
         self.lock = threading.Lock()
 
     def process_packet(self, packet: bytes, sender: tuple[str, int], show_errors: bool = False) -> list[str]:
         try:
             header = self.adapter.decode_header(packet)
             packet_name = packet_name_for(header.packet_id)
-            message = self.adapter.decode(packet)
         except (UnsupportedPacket, ValueError) as exc:
             if show_errors:
                 print(f"Ignored packet from {sender}: {exc}", file=sys.stderr)
@@ -34,16 +35,50 @@ class TelemetryRuntime:
         with self.lock:
             self.packet_counts[packet_name] += 1
             self.last_sender = sender
+            if self.paused:
+                self.paused_packet_counts[packet_name] += 1
+                return []
+
+        try:
+            message = self.adapter.decode(packet)
+        except (UnsupportedPacket, ValueError) as exc:
+            if show_errors:
+                print(f"Ignored packet from {sender}: {exc}", file=sys.stderr)
+            return []
+
+        with self.lock:
             if message is None:
                 return []
             return self.coach.update(message)
 
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
-            state = self.coach.snapshot()
-            state["packets"] = dict(self.packet_counts)
-            state["lastSender"] = self.last_sender
-            return state
+            return self._snapshot_unlocked()
+
+    def pause(self) -> dict[str, Any]:
+        with self.lock:
+            self.paused = True
+            return self._snapshot_unlocked()
+
+    def resume(self) -> dict[str, Any]:
+        with self.lock:
+            self.paused = False
+            return self._snapshot_unlocked()
+
+    def start_new_session(self) -> dict[str, Any]:
+        with self.lock:
+            notices = self.coach.start_new_session("Manual new session started.")
+            self.coach._record_notices(notices)
+            self.paused_packet_counts.clear()
+            return self._snapshot_unlocked()
+
+    def _snapshot_unlocked(self) -> dict[str, Any]:
+        state = self.coach.snapshot()
+        state["packets"] = dict(self.packet_counts)
+        state["pausedPackets"] = dict(self.paused_packet_counts)
+        state["lastSender"] = self.last_sender
+        state["paused"] = self.paused
+        return state
 
 
 def run_udp_listener(
@@ -82,6 +117,27 @@ def serve_dashboard(runtime: TelemetryRuntime, host: str, port: int) -> Threadin
             else:
                 self.send_error(404)
 
+        def do_POST(self) -> None:
+            if self.path != "/control":
+                self.send_error(404)
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw_body = self.rfile.read(length).decode("utf-8") if length else "{}"
+            try:
+                body = json.loads(raw_body)
+            except json.JSONDecodeError:
+                self.send_error(400, "Invalid JSON")
+                return
+            action = body.get("action")
+            if action == "pause":
+                self._send("application/json; charset=utf-8", json.dumps(runtime.pause()))
+            elif action == "resume":
+                self._send("application/json; charset=utf-8", json.dumps(runtime.resume()))
+            elif action == "new-session":
+                self._send("application/json; charset=utf-8", json.dumps(runtime.start_new_session()))
+            else:
+                self.send_error(400, "Unknown control action")
+
         def log_message(self, format: str, *args: object) -> None:
             return
 
@@ -119,6 +175,8 @@ INDEX_HTML = """<!doctype html>
       <p id="sessionLine">Waiting for telemetry</p>
     </div>
     <div class="status">
+      <button id="pauseButton" type="button">Pause Listening</button>
+      <button id="newSessionButton" type="button">New Session</button>
       <span id="packetStatus">0 packets</span>
       <span id="referenceStatus">No reference</span>
     </div>
@@ -230,11 +288,25 @@ h1 { font-size: 24px; letter-spacing: 0; }
 h2 { font-size: 15px; letter-spacing: 0; }
 p, span, td, th { color: var(--muted); }
 .status { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
-.status span {
+.status span,
+.status button {
   padding: 7px 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+}
+.status button {
+  cursor: pointer;
+  color: var(--text);
+}
+.status button:hover {
+  border-color: var(--blue);
+}
+.status button.active {
+  border-color: var(--amber);
+  color: var(--amber);
 }
 .shell { padding: 18px; display: grid; gap: 18px; }
 .panel {
@@ -381,6 +453,33 @@ APP_JS = """
 const stateUrl = "/state";
 const mapCanvas = document.getElementById("trackMap");
 const traceCanvas = document.getElementById("trace");
+const pauseButton = document.getElementById("pauseButton");
+const newSessionButton = document.getElementById("newSessionButton");
+
+function initControls() {
+  pauseButton.addEventListener("click", async () => {
+    const paused = pauseButton.dataset.paused === "true";
+    await sendControl(paused ? "resume" : "pause");
+    await refresh();
+  });
+  newSessionButton.addEventListener("click", async () => {
+    const confirmed = window.confirm("Start a new session? This clears the current session laps, map, and ideal reference.");
+    if (!confirmed) return;
+    await sendControl("new-session");
+    await refresh();
+  });
+}
+
+async function sendControl(action) {
+  const response = await fetch("/control", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
+  });
+  if (!response.ok) {
+    throw new Error(`Control action failed: ${action}`);
+  }
+}
 
 function fmtMs(ms) {
   if (ms === null || ms === undefined) return "--";
@@ -418,8 +517,11 @@ function renderMetrics(state) {
   const sample = state.current.sample;
   const packets = Object.values(state.packets || {}).reduce((a, b) => a + b, 0);
   document.getElementById("packetStatus").textContent = `${packets} packets`;
+  pauseButton.dataset.paused = state.paused ? "true" : "false";
+  pauseButton.textContent = state.paused ? "Resume Listening" : "Pause Listening";
+  pauseButton.classList.toggle("active", Boolean(state.paused));
   document.getElementById("sessionLine").textContent = state.session.trackLengthM
-    ? `Track ${state.session.trackId}, ${state.session.trackLengthM} m`
+    ? `Track ${state.session.trackId}, ${state.session.trackLengthM} m${state.paused ? " · paused" : ""}`
     : "Waiting for session packet";
   document.getElementById("referenceStatus").textContent = state.reference
     ? `${state.reference.name} ${state.reference.lapTime}${state.reference.segments && state.reference.segments.length ? ` · ${state.reference.segments.length} loops` : ""}`
@@ -610,6 +712,7 @@ function centerText(ctx, w, h, text) {
   ctx.fillText(text, w / 2, h / 2);
 }
 
+initControls();
 setInterval(() => refresh().catch(console.error), 500);
 refresh().catch(console.error);
 """

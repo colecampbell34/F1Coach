@@ -44,6 +44,33 @@ class LapCoachTests(unittest.TestCase):
         self.assertEqual(coach.best_lap.sector1_time_ms, 28_111)
         self.assertEqual(coach.best_lap.sector2_time_ms, 30_222)
 
+    def test_track_change_starts_new_session(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.update(SessionInfo(self.header, 5000, 1, 10, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
+        coach.update(self._lap(lap_num=1, current_ms=10_000, last_ms=0, distance=1000))
+        coach.update(self._lap(lap_num=2, current_ms=100, last_ms=90_000, distance=10))
+
+        notices = coach.update(SessionInfo(self.header, 4300, 2, 10, 3, 0, 22, 30))
+
+        self.assertTrue(any("New track detected" in notice for notice in notices))
+        self.assertEqual(coach.track_id, 2)
+        self.assertIsNone(coach.best_lap)
+        self.assertEqual(coach.clean_laps, [])
+
+    def test_manual_new_session_clears_laps_and_reference(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.update(SessionInfo(self.header, 5000, 1, 10, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
+        coach.update(self._lap(lap_num=1, current_ms=10_000, last_ms=0, distance=1000))
+        coach.update(self._lap(lap_num=2, current_ms=100, last_ms=90_000, distance=10))
+
+        coach.start_new_session("Manual new session started.")
+
+        self.assertIsNone(coach.best_lap)
+        self.assertIsNone(coach.reference_profile())
+        self.assertEqual(coach.completed_laps, [])
+
     def test_builds_ideal_reference_from_clean_microsectors(self) -> None:
         coach = LapCoach(sample_buckets=30)
         lap_a = self._completed_lap(1, 90_000, slow_second_half=True)

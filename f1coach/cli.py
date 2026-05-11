@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 import threading
+import webbrowser
 from typing import Sequence
 
 from f1coach.dashboard import TelemetryRuntime, run_udp_listener, serve_dashboard
@@ -17,6 +18,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_args(dashboard)
     dashboard.add_argument("--http-host", default="127.0.0.1", help="Dashboard host. Default: 127.0.0.1")
     dashboard.add_argument("--http-port", type=int, default=8765, help="Dashboard port. Default: 8765")
+    dashboard.add_argument(
+        "--open-browser",
+        action="store_true",
+        help="Open the dashboard in the default browser after startup.",
+    )
 
     listen = subparsers.add_parser("listen", help="Run the terminal-only UDP listener.")
     _add_common_args(listen)
@@ -71,8 +77,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     udp_thread.start()
     server = serve_dashboard(runtime, args.http_host, args.http_port)
     print(f"F1Coach UDP listener: udp://{args.bind}:{args.port}")
-    print(f"Dashboard: http://{args.http_host}:{args.http_port}")
+    dashboard_url = f"http://{args.http_host}:{args.http_port}"
+    print(f"Dashboard: {dashboard_url}")
     print("Start driving in F1 24. Clean laps build an assist-matched ideal reference.")
+    if args.open_browser:
+        threading.Timer(0.6, lambda: webbrowser.open(dashboard_url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
