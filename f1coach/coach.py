@@ -117,6 +117,8 @@ class DynamicSegmentContext:
 
 
 class LapCoach:
+    ACTIVE_DRIVER_STATUSES = {1, 2, 3, 4}
+
     def __init__(
         self,
         sample_buckets: int = 240,
@@ -254,7 +256,7 @@ class LapCoach:
 
     def _update_lap(self, lap: LapSnapshot) -> list[str]:
         notices: list[str] = []
-        if lap.driver_status not in {1, 4}:
+        if lap.driver_status not in self.ACTIVE_DRIVER_STATUSES:
             return notices
         self.latest_lap = lap
 
@@ -484,7 +486,7 @@ class LapCoach:
             reference_delta_ms = lap.lap_time_ms - reference.lap_time_ms
             messages.append(f"Reference target: {reference.name}, {self._signed_delta(reference_delta_ms)}.")
         if self.latest_insights:
-            messages.append("Main losses: " + "; ".join(insight.detail for insight in self.latest_insights[:3]))
+            messages.append("Focus: " + "; ".join(self._compact_tip(insight) for insight in self.latest_insights[:2]))
         return messages
 
     def _sector_summary(self, lap: CompletedLap, reference: CompletedLap) -> str:
@@ -495,6 +497,26 @@ class LapCoach:
         )
         formatted = ", ".join(f"S{index + 1} {self._signed_delta(delta)}" for index, delta in enumerate(deltas))
         return f"Sector delta: {formatted}."
+
+    @staticmethod
+    def _compact_tip(insight: SegmentInsight) -> str:
+        category = insight.category
+        area = insight.area.split(" (", 1)[0]
+        if category == "braking":
+            return f"{area}: release brake earlier; {abs(insight.speed_delta_kmh):.0f} km/h down"
+        if category == "throttle":
+            return f"{area}: pick up throttle earlier after rotation"
+        if category == "minimum-speed":
+            return f"{area}: carry more apex speed"
+        if category == "steering":
+            return f"{area}: reduce steering scrub"
+        if category == "traction":
+            return f"{area}: unwind steering before full throttle"
+        if category == "ERS deployment":
+            return f"{area}: deploy more on exit"
+        if category == "ERS waste":
+            return f"{area}: save ERS until traction is available"
+        return f"{area}: review speed trace"
 
     def analyze_lap(self, lap: CompletedLap, reference: ReferenceProfile | None = None) -> list[SegmentInsight]:
         reference = reference or self.reference_profile()
@@ -531,7 +553,7 @@ class LapCoach:
                 )
             )
 
-        return sorted(insights, key=lambda insight: insight.time_delta_ms, reverse=True)[:8]
+        return sorted(insights, key=lambda insight: insight.time_delta_ms, reverse=True)[:2]
 
     def reference_profile(self) -> ReferenceProfile | None:
         if self.external_reference is not None:
@@ -548,39 +570,28 @@ class LapCoach:
             self.ideal_reference = None
             return
 
+        sector_winners = self._sector_winners(clean_laps)
+        if len(sector_winners) != 3:
+            self.ideal_reference = None
+            return
+
         by_bucket: dict[int, LapSample] = {}
-        segment_count = self.theoretical_loop_count
         raw_samples: list[LapSample] = []
         segments: list[TheoreticalSegment] = []
         cumulative_time_ms = 0
-        for index in range(segment_count):
-            start = index / segment_count
-            end = (index + 1) / segment_count
-            winner: tuple[int, CompletedLap] | None = None
-            for lap in clean_laps:
-                start_ms = self._time_at(lap.samples, start)
-                end_ms = self._time_at(lap.samples, end)
-                if start_ms is None or end_ms is None or end_ms <= start_ms:
-                    continue
-                segment_time = end_ms - start_ms
-                if winner is None or segment_time < winner[0]:
-                    winner = (segment_time, lap)
-            if winner is None:
-                continue
-            segment_time_ms, lap = winner
-            segment_samples = self._samples_between(lap.samples, start, end)
+        for index, (lap, segment_start_ms, segment_end_ms, segment_time_ms) in enumerate(sector_winners, start=1):
+            segment_samples = self._samples_between_times(lap.samples, segment_start_ms, segment_end_ms)
             if not segment_samples:
                 continue
             segments.append(
                 TheoreticalSegment(
-                    index=index + 1,
-                    start_pct=start * 100,
-                    end_pct=end * 100,
+                    index=index,
+                    start_pct=segment_samples[0].normalized_distance * 100,
+                    end_pct=segment_samples[-1].normalized_distance * 100,
                     source_lap_num=lap.lap_num,
                     segment_time_ms=segment_time_ms,
                 )
             )
-            segment_start_ms = self._time_at(lap.samples, start) or segment_samples[0].lap_time_ms
             for sample in segment_samples:
                 progress_ms = max(0, sample.lap_time_ms - segment_start_ms)
                 raw_samples.append(self._clone_sample(sample, lap_time_ms=cumulative_time_ms + progress_ms))
@@ -603,19 +614,38 @@ class LapCoach:
                 self._clone_sample(sample, lap_time_ms=lap_time_ms)
             )
 
-        best = min(clean_laps, key=lambda lap: lap.lap_time_ms)
-        lap_time_ms = min(cumulative_time_ms, best.lap_time_ms)
+        sector1_ms = sector_winners[0][3]
+        sector2_ms = sector_winners[1][3]
         self.ideal_reference = ReferenceProfile(
             name="Ideal lap",
-            source="best-microsectors",
-            lap_time_ms=lap_time_ms,
-            sector1_time_ms=best.sector1_time_ms,
-            sector2_time_ms=best.sector2_time_ms,
+            source="best-sectors",
+            lap_time_ms=cumulative_time_ms,
+            sector1_time_ms=sector1_ms,
+            sector2_time_ms=sector2_ms,
             samples=adjusted,
             lap_count=len(clean_laps),
             synthetic=True,
             segments=segments,
         )
+
+    def _sector_winners(self, clean_laps: list[CompletedLap]) -> list[tuple[CompletedLap, int, int, int]]:
+        sector_ranges: list[list[tuple[CompletedLap, int, int, int]]] = [[], [], []]
+        for lap in clean_laps:
+            sector1_ms = lap.sector1_time_ms
+            sector2_ms = lap.sector2_time_ms
+            sector3_ms = lap.sector3_time_ms
+            if sector1_ms > 0:
+                sector_ranges[0].append((lap, 0, sector1_ms, sector1_ms))
+            if sector2_ms > 0:
+                sector_ranges[1].append((lap, sector1_ms, sector1_ms + sector2_ms, sector2_ms))
+            if sector3_ms > 0:
+                sector_ranges[2].append((lap, sector1_ms + sector2_ms, lap.lap_time_ms, sector3_ms))
+        winners: list[tuple[CompletedLap, int, int, int]] = []
+        for options in sector_ranges:
+            if not options:
+                return []
+            winners.append(min(options, key=lambda option: option[3]))
+        return winners
 
     def _classify_segment(
         self,
@@ -808,6 +838,14 @@ class LapCoach:
     def _samples_between(self, samples: list[LapSample], start: float, end: float) -> list[LapSample]:
         return [sample for sample in samples if start <= sample.normalized_distance <= end]
 
+    @staticmethod
+    def _samples_between_times(samples: list[LapSample], start_ms: int, end_ms: int) -> list[LapSample]:
+        return [
+            sample
+            for sample in sorted(samples, key=lambda item: item.lap_time_ms)
+            if start_ms <= sample.lap_time_ms <= end_ms
+        ]
+
     def _setup_suggestions(self, lap: CompletedLap, reference: ReferenceProfile | None) -> list[str]:
         if reference is None or not lap.samples or not reference.samples:
             return []
@@ -827,35 +865,19 @@ class LapCoach:
 
         suggestions: list[str] = []
         if categories.get("traction", 0) >= 2 or lap_slip > 0.25:
-            suggestions.append(
-                "Setup trend: repeated exit traction loss. Consider lower on-throttle differential, softer rear ARB/suspension, "
-                "or one click more rear wing if the loss is mostly in slow-corner exits."
-            )
+            suggestions.append("Setup: repeated exit slip. Try lower on-throttle diff or one click more rear wing.")
         if categories.get("steering", 0) >= 2 or lap_steer > ref_steer + 0.12:
-            suggestions.append(
-                "Setup trend: steering demand is higher than reference in loaded corners. If the line is correct, test more front wing, "
-                "slightly lower front tyre pressure, or a more open off-throttle diff for rotation."
-            )
+            suggestions.append("Setup: high steering demand. Try more front wing or a more open off-throttle diff.")
         if categories.get("braking", 0) >= 2:
-            suggestions.append(
-                "Setup trend: braking losses repeat. If fronts lock, move bias rearward one click; if the rear steps out, move bias forward "
-                "or soften the initial brake hit."
-            )
+            suggestions.append("Setup: repeated braking loss. If fronts lock, move bias rearward one click.")
         if categories.get("ERS deployment", 0) >= 2:
-            suggestions.append(
-                "Energy trend: ERS is being held through exits where acceleration is available. Shift deployment to corner exits that lead "
-                "onto longer full-throttle sections, then conserve in short bursts before braking zones."
-            )
+            suggestions.append("Energy: deploy earlier on exits that lead onto long full-throttle sections.")
         suggestions.extend(self._dynamic_setup_suggestions(insights, lap, reference))
         if self.driving_goal == "race" and suggestions:
-            suggestions.append(
-                "Race pace goal: favor the setup or technique change that stays repeatable over tyre life, not the one-lap fix that adds snaps or lockups."
-            )
+            suggestions.append("Race pace: choose the fix that stays stable over tyre life.")
         elif self.driving_goal == "qualifying" and suggestions:
-            suggestions.append(
-                "Qualifying goal: prioritize the change that improves the highest-loss corner exit and lets you deploy earlier on the next straight."
-            )
-        return suggestions[:3]
+            suggestions.append("Qualifying: prioritize the biggest exit loss before the next straight.")
+        return suggestions[:2]
 
     def _reference_source_for(self, reference: ReferenceProfile, start: float, end: float) -> str | None:
         if not reference.segments:
@@ -871,8 +893,8 @@ class LapCoach:
             return None
         source_laps = sorted({segment.source_lap_num for segment in overlapping})
         if len(source_laps) == 1:
-            return f"reference loop from lap {source_laps[0]}"
-        return "reference loops from laps " + ", ".join(str(lap_num) for lap_num in source_laps[:4])
+            return f"reference sector from lap {source_laps[0]}"
+        return "reference sectors from laps " + ", ".join(str(lap_num) for lap_num in source_laps[:3])
 
     def _ers_used(self, samples: list[LapSample]) -> float | None:
         values = [sample.ers_deployed_this_lap_j for sample in samples if sample.ers_deployed_this_lap_j is not None]
@@ -954,6 +976,7 @@ class LapCoach:
                 "lapNum": self.active_lap_num,
                 "invalid": self.active_invalid,
                 "gameInvalid": self.active_game_invalid,
+                "telemetry": self._telemetry_to_dict(self.latest_telemetry),
                 "sample": self._sample_to_dict(current_sample) if current_sample else None,
                 "samples": [self._sample_to_dict(sample) for sample in current_samples[-500:]],
             },
@@ -961,9 +984,11 @@ class LapCoach:
                 "source": map_source,
                 "samples": [self._sample_to_dict(sample) for sample in map_samples[-900:]],
             },
-            "bestLap": self._lap_summary(best_lap) if best_lap else None,
+            "bestLap": self._lap_summary(best_lap, reference) if best_lap else None,
             "reference": self._reference_to_dict(reference) if reference else None,
-            "completedLaps": [self._lap_summary(lap) for lap in self.completed_laps[-10:]],
+            "completedLaps": [
+                self._lap_summary(lap, reference, include_samples=True) for lap in self.completed_laps[-20:]
+            ],
             "insights": [asdict(insight) for insight in self.latest_insights],
             "setupInsights": self.latest_setup_suggestions,
             "notices": self.notices[-12:],
@@ -987,17 +1012,44 @@ class LapCoach:
             "error": error,
         }
 
-    def _lap_summary(self, lap: CompletedLap) -> dict[str, Any]:
-        return {
+    def _lap_summary(
+        self,
+        lap: CompletedLap,
+        reference: ReferenceProfile | None = None,
+        include_samples: bool = False,
+    ) -> dict[str, Any]:
+        summary: dict[str, Any] = {
             "lapNum": lap.lap_num,
             "lapTimeMs": lap.lap_time_ms,
             "lapTime": self._format_ms(lap.lap_time_ms),
             "sector1Ms": lap.sector1_time_ms,
             "sector2Ms": lap.sector2_time_ms,
             "sector3Ms": lap.sector3_time_ms,
+            "deltaToReferenceMs": self._lap_reference_delta(lap, reference),
+            "ersUsedKj": self._lap_ers_used_kj(lap),
             "invalid": lap.invalid,
             "gameInvalid": lap.game_invalid,
         }
+        if include_samples:
+            summary["samples"] = [self._sample_to_dict(sample) for sample in lap.samples[-700:]]
+        return summary
+
+    @staticmethod
+    def _lap_reference_delta(lap: CompletedLap, reference: ReferenceProfile | None) -> int | None:
+        if reference is None:
+            return None
+        return lap.lap_time_ms - reference.lap_time_ms
+
+    @staticmethod
+    def _lap_ers_used_kj(lap: CompletedLap) -> float | None:
+        deployed = [
+            sample.ers_deployed_this_lap_j
+            for sample in lap.samples
+            if sample.ers_deployed_this_lap_j is not None
+        ]
+        if not deployed:
+            return None
+        return max(deployed) / 1000
 
     def _live_sample(self) -> LapSample | None:
         if self.latest_lap is None or self.latest_telemetry is None:
@@ -1072,6 +1124,19 @@ class LapCoach:
             "avgSlipRatio": sample.avg_slip_ratio,
             "avgSlipAngle": sample.avg_slip_angle,
             "worldPosition": sample.world_position,
+        }
+
+    @staticmethod
+    def _telemetry_to_dict(telemetry: CarTelemetrySnapshot | None) -> dict[str, Any] | None:
+        if telemetry is None:
+            return None
+        return {
+            "speedKmh": telemetry.speed_kmh,
+            "throttle": telemetry.throttle,
+            "brake": telemetry.brake,
+            "steer": telemetry.steer,
+            "gear": telemetry.gear,
+            "engineRpm": telemetry.engine_rpm,
         }
 
     @staticmethod

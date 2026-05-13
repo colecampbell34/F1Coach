@@ -91,6 +91,29 @@ class LapCoachTests(unittest.TestCase):
         self.assertEqual(sample["speedKmh"], 240)
         self.assertEqual(sample["throttle"], 0.9)
 
+    def test_practice_program_driver_statuses_build_live_sample(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.update(SessionInfo(self.header, 5000, 3, 10, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=120, throttle=0.2, brake=0.3))
+
+        coach.update(self._lap(lap_num=1, current_ms=10_000, last_ms=0, distance=1000, driver_status=3))
+
+        sample = coach.snapshot()["current"]["sample"]
+        self.assertIsNotNone(sample)
+        self.assertEqual(sample["speedKmh"], 120)
+
+    def test_snapshot_exposes_raw_telemetry_without_lap_sample(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.update(SessionInfo(self.header, 5000, 3, 10, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=121, throttle=0.25, brake=0.0))
+        coach.update(self._lap(lap_num=1, current_ms=0, last_ms=0, distance=0, driver_status=3))
+
+        current = coach.snapshot()["current"]
+
+        self.assertIsNone(current["sample"])
+        self.assertEqual(current["telemetry"]["speedKmh"], 121)
+        self.assertEqual(current["telemetry"]["throttle"], 0.25)
+
     def test_track_map_uses_static_best_lap_not_active_trace(self) -> None:
         coach = LapCoach(sample_buckets=10)
         coach.active_samples = [self._sample(10_000, 0.20, 180, 0.5, 0.0)]
@@ -102,6 +125,29 @@ class LapCoachTests(unittest.TestCase):
 
         self.assertEqual(state["trackMap"]["source"], "Best lap 1")
         self.assertGreater(len(state["trackMap"]["samples"]), 0)
+
+    def test_completed_lap_snapshot_includes_review_metrics_and_samples(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        lap = CompletedLap(
+            4,
+            91_500,
+            30_000,
+            31_000,
+            False,
+            [
+                self._sample(10_000, 0.10, 180, 0.5, 0.0, ers_j=20_000),
+                self._sample(20_000, 0.30, 220, 0.9, 0.0, ers_j=185_000),
+            ],
+        )
+        coach.completed_laps = [lap]
+        coach.best_lap = lap
+        coach.ideal_reference = ReferenceProfile("Ideal lap", "test", 90_000, 29_000, 30_000, lap.samples)
+
+        summary = coach.snapshot()["completedLaps"][0]
+
+        self.assertEqual(summary["deltaToReferenceMs"], 1_500)
+        self.assertEqual(summary["ersUsedKj"], 185)
+        self.assertEqual(len(summary["samples"]), 2)
 
     def test_uses_active_lap_sector_times_when_lap_rolls_over(self) -> None:
         coach = LapCoach(sample_buckets=10)
@@ -142,7 +188,7 @@ class LapCoachTests(unittest.TestCase):
         self.assertIsNone(coach.reference_profile())
         self.assertEqual(coach.completed_laps, [])
 
-    def test_builds_ideal_reference_from_clean_microsectors(self) -> None:
+    def test_builds_ideal_reference_from_best_sectors(self) -> None:
         coach = LapCoach(sample_buckets=30)
         lap_a = self._completed_lap(1, 90_000, slow_second_half=True)
         lap_b = self._completed_lap(2, 89_000, slow_second_half=False)
@@ -154,28 +200,37 @@ class LapCoachTests(unittest.TestCase):
         assert coach.ideal_reference is not None
         self.assertEqual(coach.ideal_reference.name, "Ideal lap")
         self.assertLessEqual(coach.ideal_reference.lap_time_ms, 89_000)
-        self.assertTrue(coach.ideal_reference.segments)
+        self.assertEqual(coach.ideal_reference.source, "best-sectors")
+        self.assertEqual(len(coach.ideal_reference.segments), 3)
         self.assertTrue(all(segment.source_lap_num in {1, 2} for segment in coach.ideal_reference.segments))
 
-    def test_theoretical_best_sums_fastest_loops_from_any_clean_lap(self) -> None:
-        coach = LapCoach(sample_buckets=60, theoretical_loop_count=3)
+    def test_ideal_lap_sums_fastest_sector_times_only(self) -> None:
+        coach = LapCoach(sample_buckets=60)
         lap_a = CompletedLap(
             1,
             90_000,
-            30_000,
-            30_000,
+            28_000,
+            32_000,
             False,
             self._piecewise_samples([28_000, 32_000, 30_000]),
         )
         lap_b = CompletedLap(
             2,
             87_000,
-            30_000,
+            31_000,
             29_000,
             False,
-            self._piecewise_samples([31_000, 27_000, 29_000]),
+            self._piecewise_samples([31_000, 29_000, 27_000]),
         )
-        coach.clean_laps = [lap_a, lap_b]
+        lap_c = CompletedLap(
+            3,
+            88_000,
+            30_000,
+            30_000,
+            False,
+            self._piecewise_samples([30_000, 30_000, 28_000]),
+        )
+        coach.clean_laps = [lap_a, lap_b, lap_c]
 
         coach._rebuild_ideal_reference()
 
@@ -224,7 +279,7 @@ class LapCoachTests(unittest.TestCase):
 
         suggestions = coach._setup_suggestions(lap, reference)
 
-        self.assertTrue(any("exit traction" in suggestion for suggestion in suggestions))
+        self.assertTrue(any("exit slip" in suggestion for suggestion in suggestions))
 
     def test_dynamic_context_adds_corner_specific_advice(self) -> None:
         coach = LapCoach(sample_buckets=30)
@@ -314,6 +369,7 @@ class LapCoachTests(unittest.TestCase):
         invalid: bool = False,
         s1: int = 30_000,
         s2: int = 30_000,
+        driver_status: int = 1,
     ) -> LapSnapshot:
         return LapSnapshot(
             header=self.header,
@@ -329,7 +385,7 @@ class LapCoachTests(unittest.TestCase):
             sector=0,
             current_lap_invalid=invalid,
             pit_status=0,
-            driver_status=1,
+            driver_status=driver_status,
             result_status=2,
             speed_trap_fastest_speed_kmh=0.0,
         )

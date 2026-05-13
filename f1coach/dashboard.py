@@ -202,39 +202,11 @@ INDEX_HTML = """<!doctype html>
   </header>
 
   <main class="shell">
-    <section class="panel cockpit">
-      <div class="speedBlock">
-        <span>Speed</span>
-        <strong id="speed">--</strong>
-        <small>km/h</small>
-      </div>
-      <div class="gearBlock">
-        <span>Gear</span>
-        <strong id="gear">-</strong>
-      </div>
-      <div class="stackBlock">
-        <div><span>Delta</span><strong id="delta">--</strong></div>
-        <div><span>ERS</span><strong id="ers">--</strong></div>
-      </div>
-      <div class="pedals">
-        <div class="pedal">
-          <span>Throttle</span>
-          <div class="bar"><i id="throttleBar"></i></div>
-          <strong id="throttle">--</strong>
-        </div>
-        <div class="pedal">
-          <span>Brake</span>
-          <div class="bar brake"><i id="brakeBar"></i></div>
-          <strong id="brake">--</strong>
-        </div>
-      </div>
-    </section>
-
     <section class="dashboardGrid">
       <div class="panel mapPanel">
         <div class="panelHeader">
-          <h2>Delta Map</h2>
-          <span id="mapHint">Static map pending</span>
+          <h2>Selected Lap Delta Map</h2>
+          <span id="mapHint">Select a completed lap</span>
         </div>
         <canvas id="trackMap" width="720" height="520"></canvas>
         <div class="mapLegend">
@@ -252,14 +224,14 @@ INDEX_HTML = """<!doctype html>
       </aside>
 
       <section class="panel inputTracePanel">
-        <div class="panelHeader"><h2>Input Trace</h2><span>Throttle and brake vs lap distance</span></div>
+        <div class="panelHeader"><h2>Selected Lap Trace</h2><span>Throttle and brake vs lap distance</span></div>
         <canvas id="trace" width="760" height="120"></canvas>
       </section>
 
       <div class="panel lapPanel">
         <div class="panelHeader"><h2>Lap History</h2></div>
         <table>
-          <thead><tr><th>Lap</th><th>Time</th><th>S1</th><th>S2</th><th>S3</th><th>Status</th></tr></thead>
+          <thead><tr><th>Lap</th><th>Time</th><th>Delta</th><th>ERS</th><th>Status</th></tr></thead>
           <tbody id="lapTable"></tbody>
         </table>
       </div>
@@ -354,7 +326,7 @@ p, span, td, th { color: var(--muted); }
   min-height: 0;
   padding: 10px;
   display: grid;
-  grid-template-rows: 86px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 10px;
 }
 .panel {
@@ -373,105 +345,29 @@ p, span, td, th { color: var(--muted); }
   padding: 9px 12px;
   border-bottom: 1px solid var(--line);
 }
-.cockpit {
-  display: grid;
-  grid-template-columns: 150px 82px 170px minmax(260px, 1fr);
-  align-items: stretch;
-  min-height: 0;
-  width: 100%;
-}
-.cockpit > div {
-  border-right: 1px solid var(--line);
-  padding: 9px 12px;
-}
-.cockpit > div:last-child { border-right: 0; }
-.cockpit span { display: block; font-size: 11px; text-transform: uppercase; color: var(--muted); }
-.speedBlock strong {
-  display: inline-block;
-  margin-top: 2px;
-  font-size: 48px;
-  line-height: .92;
-  letter-spacing: 0;
-}
-.speedBlock small { color: var(--muted); font-size: 13px; margin-left: 4px; }
-.gearBlock {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-.gearBlock strong {
-  display: block;
-  font-size: 54px;
-  line-height: .9;
-  letter-spacing: 0;
-}
-.stackBlock {
-  display: grid;
-  gap: 5px;
-}
-.stackBlock div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: baseline;
-  padding: 4px 0;
-  border-bottom: 1px solid var(--line);
-}
-.stackBlock div:last-child { border-bottom: 0; }
-.stackBlock strong { font-size: 21px; letter-spacing: 0; }
-.pedals {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-.pedal {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-rows: auto 1fr auto;
-  gap: 5px 8px;
-  align-items: end;
-}
-.pedal span { grid-column: 1 / -1; }
-.pedal strong { font-size: 20px; letter-spacing: 0; }
-.bar {
-  height: 16px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  overflow: hidden;
-  background: #091018;
-}
-.bar i {
-  display: block;
-  width: 0%;
-  height: 100%;
-  background: var(--green);
-  transition: width .04s linear;
-}
-.bar.brake i { background: var(--red); }
 .dashboardGrid {
   display: grid;
   min-height: 0;
   gap: 10px;
-  grid-template-columns: minmax(300px, .8fr) minmax(360px, 1.08fr) minmax(340px, .95fr);
-  grid-template-rows: minmax(0, 1fr) 156px;
+  grid-template-columns: minmax(320px, 1.02fr) minmax(360px, 1.08fr) minmax(320px, .9fr);
+  grid-template-rows: 220px minmax(0, 1fr) 150px;
 }
 .mapPanel {
   display: grid;
   grid-column: 1;
-  grid-row: 1;
+  grid-row: 1 / span 2;
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 .priorityPanel {
   display: grid;
   grid-column: 2;
-  grid-row: 1 / span 2;
+  grid-row: 1 / span 3;
   grid-template-rows: auto minmax(0, 1fr) auto minmax(82px, .46fr);
 }
 .inputTracePanel {
   display: grid;
   grid-column: 1;
-  grid-row: 2;
+  grid-row: 3;
   grid-template-rows: auto minmax(0, 1fr);
 }
 .lapPanel {
@@ -482,7 +378,7 @@ p, span, td, th { color: var(--muted); }
 .feedPanel {
   display: grid;
   grid-column: 3;
-  grid-row: 2;
+  grid-row: 2 / span 2;
   grid-template-rows: auto minmax(0, 1fr);
 }
 canvas { display: block; width: 100%; height: auto; background: #0b1117; }
@@ -532,14 +428,24 @@ canvas { display: block; width: 100%; height: auto; background: #0b1117; }
   border-radius: 6px;
   padding: 8px;
   background: var(--panel-2);
+  cursor: pointer;
 }
 .insight.high { border-left-color: var(--red); }
 .insight.low { border-left-color: var(--blue); }
-.insight strong { display: block; margin-bottom: 4px; }
+.insight.selected {
+  border-color: var(--blue);
+  box-shadow: inset 0 0 0 1px var(--blue);
+}
+.insight strong { display: block; margin-bottom: 6px; color: var(--text); }
 .insight span { display: block; line-height: 1.32; }
+.insight .area { color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+.insight .action { color: var(--text); }
 .insight .evidence { color: var(--blue); margin-top: 5px; font-size: 12px; }
-.insight .recommendation { color: var(--text); margin-top: 5px; }
 .insight .setup { color: var(--amber); margin-top: 5px; font-size: 12px; }
+.lapPanel table { min-width: 0; }
+.lapPanel tr { cursor: pointer; }
+.lapPanel tr.selected { background: #1b2a37; }
+.lapPanel td, .lapPanel th { white-space: nowrap; }
 .feed div {
   padding: 7px 8px;
   border-radius: 6px;
@@ -559,9 +465,6 @@ th { color: var(--text); font-weight: 600; }
   body { overflow: auto; display: block; }
   .topbar { align-items: flex-start; flex-direction: column; }
   .shell { height: auto; grid-template-rows: auto; }
-  .cockpit { grid-template-columns: 1fr 86px; }
-  .cockpit > div { border-bottom: 1px solid var(--line); }
-  .pedals { grid-column: 1 / -1; }
   .dashboardGrid { display: grid; grid-template-columns: 1fr; grid-template-rows: none; }
   .mapPanel, .priorityPanel, .inputTracePanel, .lapPanel, .feedPanel {
     grid-column: auto;
@@ -580,6 +483,8 @@ const traceCanvas = document.getElementById("trace");
 const pauseButton = document.getElementById("pauseButton");
 const newSessionButton = document.getElementById("newSessionButton");
 const goalButtons = Array.from(document.querySelectorAll("[data-goal]"));
+let selectedLapNum = null;
+let selectedInsightIndex = null;
 
 function initControls() {
   goalButtons.forEach(button => {
@@ -632,6 +537,44 @@ function lapTime(ms) {
   return `${m}:${String(s).padStart(2, "0")}.${x}`;
 }
 
+function fmtKj(value) {
+  if (value === null || value === undefined) return "--";
+  return `${Math.round(value)} kJ`;
+}
+
+function selectedLapFromState(state) {
+  const laps = state.completedLaps || [];
+  if (selectedLapNum === null && laps.length) {
+    selectedLapNum = laps[laps.length - 1].lapNum;
+  }
+  return laps.find(lap => lap.lapNum === selectedLapNum) || laps[laps.length - 1] || null;
+}
+
+function shortSentence(text) {
+  if (!text) return "";
+  const sentence = String(text).split(/(?<=[.!?])\\s+/)[0] || String(text);
+  return sentence.length > 150 ? sentence.slice(0, 147).trimEnd() + "..." : sentence;
+}
+
+function titleCase(text) {
+  return String(text || "")
+    .replace(/-/g, " ")
+    .replace(/\\b\\w/g, c => c.toUpperCase());
+}
+
+function specificTip(item) {
+  const category = item.category || "pace";
+  const speedLoss = Math.round(Math.abs(item.speed_delta_kmh || 0));
+  if (category === "braking") return `Release brake earlier here. You are ${speedLoss} km/h down.`;
+  if (category === "throttle") return "Start throttle pickup earlier after rotation.";
+  if (category === "minimum-speed") return `Carry more apex speed. You are ${speedLoss} km/h down.`;
+  if (category === "steering") return "Reduce steering angle before adding speed.";
+  if (category === "traction") return "Unwind steering before full throttle.";
+  if (category === "ERS deployment") return "Use more ERS on this exit.";
+  if (category === "ERS waste") return "Save ERS until the car can accelerate.";
+  return "Review this speed trace first.";
+}
+
 async function refresh() {
   const response = await fetch(stateUrl, { cache: "no-store" });
   const state = await response.json();
@@ -645,7 +588,6 @@ async function refresh() {
 }
 
 function renderMetrics(state) {
-  const sample = state.current.sample;
   const packets = Object.values(state.packets || {}).reduce((a, b) => a + b, 0);
   document.getElementById("packetStatus").textContent = `${packets} packets`;
   pauseButton.dataset.paused = state.paused ? "true" : "false";
@@ -662,23 +604,8 @@ function renderMetrics(state) {
     ? `${trackLabel}, ${state.session.trackLengthM} m · ${goalLabel}${state.paused ? " · paused" : ""}`
     : "Waiting for session packet";
   document.getElementById("referenceStatus").textContent = state.reference
-    ? `${state.reference.name} ${state.reference.lapTime}${state.reference.segments && state.reference.segments.length ? ` · ${state.reference.segments.length} loops` : ""}`
+    ? `${state.reference.name} ${state.reference.lapTime}${state.reference.segments && state.reference.segments.length ? ` · ${state.reference.segments.length} sectors` : ""}`
     : "No reference";
-
-  document.getElementById("speed").textContent = sample ? `${sample.speedKmh}` : "--";
-  document.getElementById("gear").textContent = sample ? `${sample.gear}` : "-";
-  document.getElementById("throttle").textContent = sample ? pct(sample.throttle) : "--";
-  document.getElementById("brake").textContent = sample ? pct(sample.brake) : "--";
-  document.getElementById("throttleBar").style.width = sample ? pct(sample.throttle) : "0%";
-  document.getElementById("brakeBar").style.width = sample ? pct(sample.brake) : "0%";
-  document.getElementById("ers").textContent = sample && sample.ersPercent !== null ? `${Math.round(sample.ersPercent)}%` : "--";
-
-  let delta = "--";
-  if (sample && state.reference && state.reference.samples.length) {
-    const ref = nearestByDistance(state.reference.samples, sample.normalizedDistance);
-    if (ref) delta = fmtMs(sample.lapTimeMs - ref.lapTimeMs);
-  }
-  document.getElementById("delta").textContent = delta;
 }
 
 function renderInsights(insights) {
@@ -689,11 +616,18 @@ function renderInsights(insights) {
     return;
   }
   for (const item of insights) {
+    const index = insights.indexOf(item);
     const div = document.createElement("div");
-    div.className = `insight ${item.severity}`;
-    const setup = item.setup_hint ? `<span class="setup">${item.setup_hint}</span>` : "";
+    div.className = `insight ${item.severity}${selectedInsightIndex === index ? " selected" : ""}`;
+    div.addEventListener("click", () => {
+      selectedInsightIndex = selectedInsightIndex === index ? null : index;
+      refresh().catch(console.error);
+    });
+    const area = item.area || `${Math.round(item.start_pct)}-${Math.round(item.end_pct)}% lap`;
+    const action = specificTip(item);
+    const setup = item.setup_hint ? `<span class="setup">${shortSentence(item.setup_hint)}</span>` : "";
     const source = item.reference_source ? `<span class="evidence">${item.reference_source}</span>` : "";
-    div.innerHTML = `<strong>${item.category} · ${fmtMs(item.time_delta_ms)}</strong><span>${item.detail}</span>${source}<span class="evidence">${item.evidence}</span><span class="recommendation">${item.recommendation}</span>${setup}`;
+    div.innerHTML = `<strong>${titleCase(item.category)} · ${fmtMs(item.time_delta_ms)}</strong><span class="area">${area}</span><span class="action">${action}</span>${source}<span class="evidence">${item.evidence}</span>${setup}`;
     target.appendChild(div);
   }
 }
@@ -717,10 +651,23 @@ function renderSetupInsights(items) {
 function renderLaps(laps) {
   const body = document.getElementById("lapTable");
   body.innerHTML = "";
+  const selectable = laps.filter(lap => lap.samples && lap.samples.length);
+  if (selectedLapNum === null && selectable.length) {
+    selectedLapNum = selectable[selectable.length - 1].lapNum;
+  }
+  if (selectedLapNum !== null && selectable.length && !selectable.some(lap => lap.lapNum === selectedLapNum)) {
+    selectedLapNum = selectable[selectable.length - 1].lapNum;
+  }
   for (const lap of [...laps].reverse()) {
     const row = document.createElement("tr");
+    row.classList.toggle("selected", lap.lapNum === selectedLapNum);
+    row.addEventListener("click", () => {
+      selectedLapNum = lap.lapNum;
+      selectedInsightIndex = null;
+      refresh().catch(console.error);
+    });
     const status = lap.invalid ? "Invalid" : lap.gameInvalid ? "Clean (practice flag)" : "Clean";
-    row.innerHTML = `<td>${lap.lapNum}</td><td>${lap.lapTime}</td><td>${lapTime(lap.sector1Ms)}</td><td>${lapTime(lap.sector2Ms)}</td><td>${lapTime(lap.sector3Ms)}</td><td>${status}</td>`;
+    row.innerHTML = `<td>${lap.lapNum}</td><td>${lap.lapTime}</td><td>${fmtMs(lap.deltaToReferenceMs)}</td><td>${fmtKj(lap.ersUsedKj)}</td><td>${status}</td>`;
     body.appendChild(row);
   }
 }
@@ -743,34 +690,30 @@ function renderMap(state) {
   ctx.fillStyle = "#0b1117";
   ctx.fillRect(0, 0, w, h);
 
-  const ref = (state.trackMap && state.trackMap.samples || []).filter(hasPos);
-  const current = (state.current.samples || []).filter(hasPos);
-  const referenceSamples = state.reference && state.reference.samples ? state.reference.samples : [];
-  document.getElementById("mapHint").textContent = state.trackMap && state.trackMap.source
-    ? `Static map: ${state.trackMap.source}`
-    : "Static map pending";
+  const selectedLap = selectedLapFromState(state);
+  const selectedSamples = orderedMapSamples(selectedLap && selectedLap.samples || []);
+  const fallbackSamples = orderedMapSamples(state.trackMap && state.trackMap.samples || []);
+  const ref = selectedSamples.length ? selectedSamples : fallbackSamples;
+  const referenceSamples = orderedSamples(state.reference && state.reference.samples ? state.reference.samples : []);
+  document.getElementById("mapHint").textContent = selectedLap
+    ? `Lap ${selectedLap.lapNum} vs ${state.reference ? state.reference.name : "ideal lap pending"}`
+    : "Complete a lap to review delta";
   if (!ref.length) {
     centerText(ctx, w, h, "Complete a clean lap with motion packets to lock the static map");
     return;
   }
   const bounds = getBounds(ref);
-  drawPath(ctx, ref, bounds, "#425161", 5);
-  if (current.length >= 2 && referenceSamples.length) {
-    drawDeltaPath(ctx, current, referenceSamples, bounds);
-  } else {
-    for (const insight of state.insights || []) {
-      const segment = ref.filter(s => s.normalizedDistance >= insight.start_pct / 100 && s.normalizedDistance <= insight.end_pct / 100);
-      drawPath(ctx, segment, bounds, insight.severity === "high" ? "#ff5c7a" : "#f5b84b", 7);
-    }
-    drawPath(ctx, current, bounds, "#5fb5ff", 3);
+  drawGroupedPath(ctx, ref, bounds, "#425161", 5);
+  if (selectedSamples.length >= 2 && referenceSamples.length) {
+    drawDeltaPath(ctx, selectedSamples, referenceSamples, bounds);
+  } else if (selectedSamples.length >= 2) {
+    drawGroupedPath(ctx, selectedSamples, bounds, "#5fb5ff", 4);
   }
-  const latest = current[current.length - 1];
-  if (latest) {
-    const [x, y] = project(latest, bounds);
-    ctx.fillStyle = "#32d583";
-    ctx.beginPath();
-    ctx.arc(x, y, 7, 0, Math.PI * 2);
-    ctx.fill();
+  const selectedInsight = (state.insights || [])[selectedInsightIndex];
+  if (selectedInsight) {
+    const segment = ref.filter(s => s.normalizedDistance >= selectedInsight.start_pct / 100 && s.normalizedDistance <= selectedInsight.end_pct / 100);
+    drawGroupedPath(ctx, segment, bounds, "#ffffff", 10);
+    drawGroupedPath(ctx, segment, bounds, "#5fb5ff", 6);
   }
 }
 
@@ -779,18 +722,24 @@ function drawDeltaPath(ctx, samples, referenceSamples, bounds) {
   ctx.lineWidth = 6;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  for (let i = 1; i < samples.length; i += 1) {
-    const previous = samples[i - 1];
-    const current = samples[i];
-    const ref = nearestByDistance(referenceSamples, current.normalizedDistance);
-    if (!ref) continue;
-    ctx.strokeStyle = deltaColor(current.lapTimeMs - ref.lapTimeMs);
-    const [x1, y1] = project(previous, bounds);
-    const [x2, y2] = project(current, bounds);
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
+  for (const group of sampleGroups(samples)) {
+    for (let i = 1; i < group.length; i += 1) {
+      const previous = group[i - 1];
+      const current = group[i];
+      const refPreviousMs = timeAtDistance(referenceSamples, previous.normalizedDistance);
+      const refCurrentMs = timeAtDistance(referenceSamples, current.normalizedDistance);
+      if (refPreviousMs === null || refCurrentMs === null) continue;
+      const lapSegmentMs = current.lapTimeMs - previous.lapTimeMs;
+      const refSegmentMs = refCurrentMs - refPreviousMs;
+      if (lapSegmentMs <= 0 || refSegmentMs <= 0) continue;
+      ctx.strokeStyle = deltaColor(lapSegmentMs - refSegmentMs);
+      const [x1, y1] = project(previous, bounds);
+      const [x2, y2] = project(current, bounds);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
   }
 }
 
@@ -807,7 +756,8 @@ function renderTrace(state) {
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = "#0b1117";
   ctx.fillRect(0, 0, w, h);
-  const samples = state.current.samples || [];
+  const selectedLap = selectedLapFromState(state);
+  const samples = selectedLap && selectedLap.samples ? selectedLap.samples : [];
   drawTraceGrid(ctx, w, h);
   drawTrace(ctx, samples, w, h, "throttle", 1, "#32d583");
   drawTrace(ctx, samples, w, h, "brake", 1, "#ff5c7a");
@@ -826,6 +776,7 @@ function drawTraceGrid(ctx, w, h) {
 }
 
 function drawTrace(ctx, samples, w, h, key, max, color) {
+  samples = orderedSamples(samples);
   if (!samples.length) return;
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
@@ -837,6 +788,12 @@ function drawTrace(ctx, samples, w, h, key, max, color) {
     else ctx.lineTo(x, y);
   });
   ctx.stroke();
+}
+
+function drawGroupedPath(ctx, samples, bounds, color, width) {
+  for (const group of sampleGroups(samples)) {
+    drawPath(ctx, group, bounds, color, width);
+  }
 }
 
 function drawPath(ctx, samples, bounds, color, width) {
@@ -855,6 +812,7 @@ function drawPath(ctx, samples, bounds, color, width) {
 }
 
 function getBounds(samples) {
+  samples = orderedMapSamples(samples);
   const xs = samples.map(s => s.worldPosition[0]);
   const ys = samples.map(s => s.worldPosition[2]);
   return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
@@ -878,6 +836,54 @@ function hasPos(sample) {
   return sample.worldPosition && sample.worldPosition.length === 3;
 }
 
+function orderedMapSamples(samples) {
+  return orderedSamples(samples).filter(hasPos);
+}
+
+function orderedSamples(samples) {
+  const byBucket = new Map();
+  for (const sample of samples || []) {
+    if (sample.normalizedDistance === null || sample.normalizedDistance === undefined) continue;
+    if (sample.normalizedDistance < 0 || sample.normalizedDistance > 1) continue;
+    const bucket = Math.round(sample.normalizedDistance * 1000);
+    byBucket.set(bucket, sample);
+  }
+  return Array.from(byBucket.values()).sort((a, b) => a.normalizedDistance - b.normalizedDistance);
+}
+
+function sampleGroups(samples) {
+  const ordered = orderedMapSamples(samples);
+  const groups = [];
+  let current = [];
+  for (const sample of ordered) {
+    const previous = current[current.length - 1];
+    if (previous && sample.normalizedDistance - previous.normalizedDistance > 0.04) {
+      if (current.length >= 2) groups.push(current);
+      current = [];
+    }
+    current.push(sample);
+  }
+  if (current.length >= 2) groups.push(current);
+  return groups;
+}
+
+function timeAtDistance(samples, distance) {
+  const ordered = orderedSamples(samples);
+  if (!ordered.length) return null;
+  if (distance <= ordered[0].normalizedDistance) return ordered[0].lapTimeMs;
+  for (let i = 1; i < ordered.length; i += 1) {
+    const previous = ordered[i - 1];
+    const current = ordered[i];
+    if (previous.normalizedDistance <= distance && distance <= current.normalizedDistance) {
+      const span = current.normalizedDistance - previous.normalizedDistance;
+      if (span <= 0) return current.lapTimeMs;
+      const ratio = (distance - previous.normalizedDistance) / span;
+      return previous.lapTimeMs + ratio * (current.lapTimeMs - previous.lapTimeMs);
+    }
+  }
+  return ordered[ordered.length - 1].lapTimeMs;
+}
+
 function nearestByDistance(samples, distance) {
   let best = null;
   let bestDiff = Infinity;
@@ -899,6 +905,6 @@ function centerText(ctx, w, h, text) {
 }
 
 initControls();
-setInterval(() => refresh().catch(console.error), 100);
+setInterval(() => refresh().catch(console.error), 500);
 refresh().catch(console.error);
 """
