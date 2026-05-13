@@ -230,37 +230,40 @@ INDEX_HTML = """<!doctype html>
       </div>
     </section>
 
-    <section class="layout">
+    <section class="dashboardGrid">
       <div class="panel mapPanel">
         <div class="panelHeader">
-          <h2>Track Map</h2>
-          <span id="mapHint">World-position trace</span>
+          <h2>Delta Map</h2>
+          <span id="mapHint">Static map pending</span>
         </div>
-        <canvas id="trackMap" width="900" height="560"></canvas>
+        <canvas id="trackMap" width="720" height="520"></canvas>
+        <div class="mapLegend">
+          <span><i class="gain"></i>Gain</span>
+          <span><i class="neutral"></i>Even</span>
+          <span><i class="loss"></i>Loss</span>
+        </div>
       </div>
 
-      <aside class="panel">
+      <aside class="panel priorityPanel">
         <div class="panelHeader"><h2>Priority Areas</h2></div>
         <div id="insights" class="insights"></div>
         <div class="panelHeader subhead"><h2>Setup / Energy Trends</h2></div>
         <div id="setupInsights" class="feed compact"></div>
       </aside>
-    </section>
 
-    <section class="panel">
-      <div class="panelHeader"><h2>Telemetry Trace</h2><span>Speed, throttle, brake vs lap distance</span></div>
-      <canvas id="trace" width="1200" height="300"></canvas>
-    </section>
+      <section class="panel inputTracePanel">
+        <div class="panelHeader"><h2>Input Trace</h2><span>Throttle and brake vs lap distance</span></div>
+        <canvas id="trace" width="760" height="120"></canvas>
+      </section>
 
-    <section class="layout bottom">
-      <div class="panel">
+      <div class="panel lapPanel">
         <div class="panelHeader"><h2>Lap History</h2></div>
         <table>
           <thead><tr><th>Lap</th><th>Time</th><th>S1</th><th>S2</th><th>S3</th><th>Status</th></tr></thead>
           <tbody id="lapTable"></tbody>
         </table>
       </div>
-      <div class="panel">
+      <div class="panel feedPanel">
         <div class="panelHeader"><h2>Coach Feed</h2></div>
         <div id="notices" class="feed"></div>
       </div>
@@ -287,26 +290,31 @@ APP_CSS = """
   --blue: #5fb5ff;
 }
 * { box-sizing: border-box; }
+html { height: 100%; }
 body {
   margin: 0;
+  height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 .topbar {
   display: flex;
   justify-content: space-between;
-  gap: 24px;
+  gap: 14px;
   align-items: center;
-  padding: 18px 28px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--line);
   background: #0d1218;
 }
 h1, h2, p { margin: 0; }
-h1 { font-size: 24px; letter-spacing: 0; }
+h1 { font-size: 20px; letter-spacing: 0; }
 h2 { font-size: 15px; letter-spacing: 0; }
 p, span, td, th { color: var(--muted); }
-.status { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.status { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .goalToggle {
   display: inline-flex;
   padding: 2px;
@@ -316,7 +324,7 @@ p, span, td, th { color: var(--muted); }
 }
 .status span,
 .status button {
-  padding: 7px 10px;
+  padding: 6px 9px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel);
@@ -342,39 +350,46 @@ p, span, td, th { color: var(--muted); }
 .goalToggle button.active {
   background: var(--panel-2);
 }
-.shell { padding: 18px; display: grid; gap: 18px; }
+.shell {
+  min-height: 0;
+  padding: 10px;
+  display: grid;
+  grid-template-rows: 86px minmax(0, 1fr);
+  gap: 10px;
+}
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
+  min-height: 0;
 }
 .panelHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 16px;
+  min-height: 38px;
+  padding: 9px 12px;
   border-bottom: 1px solid var(--line);
 }
 .cockpit {
   display: grid;
-  grid-template-columns: 180px 96px 150px 280px;
+  grid-template-columns: 150px 82px 170px minmax(260px, 1fr);
   align-items: stretch;
-  min-height: 128px;
-  justify-self: center;
-  width: min(100%, 840px);
+  min-height: 0;
+  width: 100%;
 }
 .cockpit > div {
   border-right: 1px solid var(--line);
-  padding: 14px 16px;
+  padding: 9px 12px;
 }
 .cockpit > div:last-child { border-right: 0; }
 .cockpit span { display: block; font-size: 11px; text-transform: uppercase; color: var(--muted); }
 .speedBlock strong {
   display: inline-block;
   margin-top: 2px;
-  font-size: 62px;
+  font-size: 48px;
   line-height: .92;
   letter-spacing: 0;
 }
@@ -387,40 +402,40 @@ p, span, td, th { color: var(--muted); }
 }
 .gearBlock strong {
   display: block;
-  font-size: 72px;
+  font-size: 54px;
   line-height: .9;
   letter-spacing: 0;
 }
 .stackBlock {
   display: grid;
-  gap: 10px;
+  gap: 5px;
 }
 .stackBlock div {
   display: flex;
   justify-content: space-between;
   gap: 12px;
   align-items: baseline;
-  padding: 8px 0;
+  padding: 4px 0;
   border-bottom: 1px solid var(--line);
 }
 .stackBlock div:last-child { border-bottom: 0; }
-.stackBlock strong { font-size: 24px; letter-spacing: 0; }
+.stackBlock strong { font-size: 21px; letter-spacing: 0; }
 .pedals {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: 12px;
 }
 .pedal {
   display: grid;
   grid-template-columns: 1fr auto;
   grid-template-rows: auto 1fr auto;
-  gap: 7px 10px;
+  gap: 5px 8px;
   align-items: end;
 }
 .pedal span { grid-column: 1 / -1; }
-.pedal strong { font-size: 22px; letter-spacing: 0; }
+.pedal strong { font-size: 20px; letter-spacing: 0; }
 .bar {
-  height: 18px;
+  height: 16px;
   border: 1px solid var(--line);
   border-radius: 4px;
   overflow: hidden;
@@ -431,35 +446,102 @@ p, span, td, th { color: var(--muted); }
   width: 0%;
   height: 100%;
   background: var(--green);
-  transition: width .12s linear;
+  transition: width .04s linear;
 }
 .bar.brake i { background: var(--red); }
-.layout {
+.dashboardGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(320px, .8fr);
-  gap: 18px;
+  min-height: 0;
+  gap: 10px;
+  grid-template-columns: minmax(300px, .8fr) minmax(360px, 1.08fr) minmax(340px, .95fr);
+  grid-template-rows: minmax(0, 1fr) 156px;
 }
-.bottom { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.mapPanel {
+  display: grid;
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.priorityPanel {
+  display: grid;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  grid-template-rows: auto minmax(0, 1fr) auto minmax(82px, .46fr);
+}
+.inputTracePanel {
+  display: grid;
+  grid-column: 1;
+  grid-row: 2;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.lapPanel {
+  grid-column: 3;
+  grid-row: 1;
+  overflow: auto;
+}
+.feedPanel {
+  display: grid;
+  grid-column: 3;
+  grid-row: 2;
+  grid-template-rows: auto minmax(0, 1fr);
+}
 canvas { display: block; width: 100%; height: auto; background: #0b1117; }
-.mapPanel canvas { min-height: 420px; }
-.insights, .feed { padding: 12px; display: grid; gap: 10px; }
+.mapPanel canvas {
+  height: 100%;
+  min-height: 0;
+}
+.mapLegend {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+.mapLegend span {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+.mapLegend i {
+  display: inline-block;
+  width: 22px;
+  height: 4px;
+  border-radius: 4px;
+}
+.mapLegend .gain { background: var(--green); }
+.mapLegend .neutral { background: var(--amber); }
+.mapLegend .loss { background: var(--red); }
+.inputTracePanel canvas {
+  height: 100%;
+  min-height: 0;
+}
+.insights, .feed {
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
 .subhead { border-top: 1px solid var(--line); }
 .insight {
   border: 1px solid var(--line);
   border-left: 4px solid var(--amber);
   border-radius: 6px;
-  padding: 10px;
+  padding: 8px;
   background: var(--panel-2);
 }
 .insight.high { border-left-color: var(--red); }
 .insight.low { border-left-color: var(--blue); }
 .insight strong { display: block; margin-bottom: 4px; }
-.insight span { display: block; line-height: 1.4; }
-.insight .evidence { color: var(--blue); margin-top: 7px; font-size: 12px; }
-.insight .recommendation { color: var(--text); margin-top: 7px; }
-.insight .setup { color: var(--amber); margin-top: 7px; font-size: 12px; }
+.insight span { display: block; line-height: 1.32; }
+.insight .evidence { color: var(--blue); margin-top: 5px; font-size: 12px; }
+.insight .recommendation { color: var(--text); margin-top: 5px; }
+.insight .setup { color: var(--amber); margin-top: 5px; font-size: 12px; }
 .feed div {
-  padding: 9px 10px;
+  padding: 7px 8px;
   border-radius: 6px;
   background: var(--panel-2);
   color: var(--text);
@@ -467,18 +549,26 @@ canvas { display: block; width: 100%; height: auto; background: #0b1117; }
 .feed.compact div { font-size: 13px; line-height: 1.4; }
 table { width: 100%; border-collapse: collapse; }
 th, td {
-  padding: 10px 12px;
+  padding: 7px 9px;
   border-bottom: 1px solid var(--line);
   text-align: left;
   font-size: 13px;
 }
 th { color: var(--text); font-weight: 600; }
-@media (max-width: 960px) {
+@media (max-width: 1100px) {
+  body { overflow: auto; display: block; }
   .topbar { align-items: flex-start; flex-direction: column; }
-  .cockpit { grid-template-columns: 1fr 100px; }
+  .shell { height: auto; grid-template-rows: auto; }
+  .cockpit { grid-template-columns: 1fr 86px; }
   .cockpit > div { border-bottom: 1px solid var(--line); }
   .pedals { grid-column: 1 / -1; }
-  .layout, .bottom { grid-template-columns: 1fr; }
+  .dashboardGrid { display: grid; grid-template-columns: 1fr; grid-template-rows: none; }
+  .mapPanel, .priorityPanel, .inputTracePanel, .lapPanel, .feedPanel {
+    grid-column: auto;
+    grid-row: auto;
+  }
+  .mapPanel canvas { min-height: 300px; }
+  .inputTracePanel canvas { min-height: 110px; }
 }
 """
 
@@ -564,7 +654,9 @@ function renderMetrics(state) {
   goalButtons.forEach(button => {
     button.classList.toggle("active", button.dataset.goal === state.drivingGoal);
   });
-  const trackLabel = state.session.trackId !== null && state.session.trackId !== undefined ? `Track ${state.session.trackId}` : "Track";
+  const trackLabel = state.session.trackName || (
+    state.session.trackId !== null && state.session.trackId !== undefined ? `Track ${state.session.trackId}` : "Track"
+  );
   const goalLabel = state.drivingGoal === "race" ? "race pace" : "qualifying";
   document.getElementById("sessionLine").textContent = state.session.trackLengthM
     ? `${trackLabel}, ${state.session.trackLengthM} m · ${goalLabel}${state.paused ? " · paused" : ""}`
@@ -627,7 +719,8 @@ function renderLaps(laps) {
   body.innerHTML = "";
   for (const lap of [...laps].reverse()) {
     const row = document.createElement("tr");
-    row.innerHTML = `<td>${lap.lapNum}</td><td>${lap.lapTime}</td><td>${lapTime(lap.sector1Ms)}</td><td>${lapTime(lap.sector2Ms)}</td><td>${lapTime(lap.sector3Ms)}</td><td>${lap.invalid ? "Invalid" : "Clean"}</td>`;
+    const status = lap.invalid ? "Invalid" : lap.gameInvalid ? "Clean (practice flag)" : "Clean";
+    row.innerHTML = `<td>${lap.lapNum}</td><td>${lap.lapTime}</td><td>${lapTime(lap.sector1Ms)}</td><td>${lapTime(lap.sector2Ms)}</td><td>${lapTime(lap.sector3Ms)}</td><td>${status}</td>`;
     body.appendChild(row);
   }
 }
@@ -650,20 +743,27 @@ function renderMap(state) {
   ctx.fillStyle = "#0b1117";
   ctx.fillRect(0, 0, w, h);
 
-  const ref = (state.reference && state.reference.samples || []).filter(hasPos);
+  const ref = (state.trackMap && state.trackMap.samples || []).filter(hasPos);
   const current = (state.current.samples || []).filter(hasPos);
-  const points = ref.length ? ref : current;
-  if (!points.length) {
-    centerText(ctx, w, h, "Waiting for motion packets to draw the track map");
+  const referenceSamples = state.reference && state.reference.samples ? state.reference.samples : [];
+  document.getElementById("mapHint").textContent = state.trackMap && state.trackMap.source
+    ? `Static map: ${state.trackMap.source}`
+    : "Static map pending";
+  if (!ref.length) {
+    centerText(ctx, w, h, "Complete a clean lap with motion packets to lock the static map");
     return;
   }
-  const bounds = getBounds([...ref, ...current]);
+  const bounds = getBounds(ref);
   drawPath(ctx, ref, bounds, "#425161", 5);
-  for (const insight of state.insights || []) {
-    const segment = ref.filter(s => s.normalizedDistance >= insight.start_pct / 100 && s.normalizedDistance <= insight.end_pct / 100);
-    drawPath(ctx, segment, bounds, insight.severity === "high" ? "#ff5c7a" : "#f5b84b", 7);
+  if (current.length >= 2 && referenceSamples.length) {
+    drawDeltaPath(ctx, current, referenceSamples, bounds);
+  } else {
+    for (const insight of state.insights || []) {
+      const segment = ref.filter(s => s.normalizedDistance >= insight.start_pct / 100 && s.normalizedDistance <= insight.end_pct / 100);
+      drawPath(ctx, segment, bounds, insight.severity === "high" ? "#ff5c7a" : "#f5b84b", 7);
+    }
+    drawPath(ctx, current, bounds, "#5fb5ff", 3);
   }
-  drawPath(ctx, current, bounds, "#5fb5ff", 3);
   const latest = current[current.length - 1];
   if (latest) {
     const [x, y] = project(latest, bounds);
@@ -674,6 +774,32 @@ function renderMap(state) {
   }
 }
 
+function drawDeltaPath(ctx, samples, referenceSamples, bounds) {
+  if (samples.length < 2) return;
+  ctx.lineWidth = 6;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (let i = 1; i < samples.length; i += 1) {
+    const previous = samples[i - 1];
+    const current = samples[i];
+    const ref = nearestByDistance(referenceSamples, current.normalizedDistance);
+    if (!ref) continue;
+    ctx.strokeStyle = deltaColor(current.lapTimeMs - ref.lapTimeMs);
+    const [x1, y1] = project(previous, bounds);
+    const [x2, y2] = project(current, bounds);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+}
+
+function deltaColor(deltaMs) {
+  if (deltaMs <= -50) return "#32d583";
+  if (deltaMs >= 80) return "#ff5c7a";
+  return "#f5b84b";
+}
+
 function renderTrace(state) {
   const ctx = traceCanvas.getContext("2d");
   const w = traceCanvas.width;
@@ -682,17 +808,27 @@ function renderTrace(state) {
   ctx.fillStyle = "#0b1117";
   ctx.fillRect(0, 0, w, h);
   const samples = state.current.samples || [];
-  const ref = state.reference ? state.reference.samples || [] : [];
-  drawTrace(ctx, ref, w, h, "speedKmh", 360, "#425161");
-  drawTrace(ctx, samples, w, h, "speedKmh", 360, "#5fb5ff");
+  drawTraceGrid(ctx, w, h);
   drawTrace(ctx, samples, w, h, "throttle", 1, "#32d583");
   drawTrace(ctx, samples, w, h, "brake", 1, "#ff5c7a");
+}
+
+function drawTraceGrid(ctx, w, h) {
+  ctx.strokeStyle = "#263544";
+  ctx.lineWidth = 1;
+  for (const pct of [0.25, 0.5, 0.75]) {
+    const y = h - 18 - pct * (h - 36);
+    ctx.beginPath();
+    ctx.moveTo(32, y);
+    ctx.lineTo(w - 24, y);
+    ctx.stroke();
+  }
 }
 
 function drawTrace(ctx, samples, w, h, key, max, color) {
   if (!samples.length) return;
   ctx.strokeStyle = color;
-  ctx.lineWidth = key === "speedKmh" ? 2 : 1.5;
+  ctx.lineWidth = 2;
   ctx.beginPath();
   samples.forEach((s, i) => {
     const x = 40 + s.normalizedDistance * (w - 70);
@@ -726,11 +862,15 @@ function getBounds(samples) {
 
 function project(sample, bounds) {
   const pad = 32;
-  const sx = (mapCanvas.width - pad * 2) / Math.max(1, bounds.maxX - bounds.minX);
-  const sy = (mapCanvas.height - pad * 2) / Math.max(1, bounds.maxY - bounds.minY);
+  const spanX = Math.max(1, bounds.maxX - bounds.minX);
+  const spanY = Math.max(1, bounds.maxY - bounds.minY);
+  const sx = (mapCanvas.width - pad * 2) / spanX;
+  const sy = (mapCanvas.height - pad * 2) / spanY;
   const scale = Math.min(sx, sy);
-  const x = pad + (sample.worldPosition[0] - bounds.minX) * scale;
-  const y = mapCanvas.height - pad - (sample.worldPosition[2] - bounds.minY) * scale;
+  const offsetX = (mapCanvas.width - spanX * scale) / 2;
+  const offsetY = (mapCanvas.height - spanY * scale) / 2;
+  const x = offsetX + (sample.worldPosition[0] - bounds.minX) * scale;
+  const y = offsetY + (sample.worldPosition[2] - bounds.minY) * scale;
   return [x, y];
 }
 
@@ -759,6 +899,6 @@ function centerText(ctx, w, h, text) {
 }
 
 initControls();
-setInterval(() => refresh().catch(console.error), 500);
+setInterval(() => refresh().catch(console.error), 100);
 refresh().catch(console.error);
 """

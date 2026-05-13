@@ -13,6 +13,7 @@ from f1coach.models import (
     SessionInfo,
     TelemetryMessage,
 )
+from f1coach.track_metadata import track_name_for_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +46,7 @@ class CompletedLap:
     sector2_time_ms: int
     invalid: bool
     samples: list[LapSample] = field(default_factory=list)
+    game_invalid: bool = False
 
     @property
     def sector3_time_ms(self) -> int:
@@ -129,12 +131,20 @@ class LapCoach:
         self.corner_metadata = corner_metadata
         self.track_length_m: int | None = None
         self.track_id: int | None = None
+        self.session_type: int | None = None
         self.latest_telemetry: CarTelemetrySnapshot | None = None
         self.latest_status: CarStatusSnapshot | None = None
         self.latest_motion: MotionSnapshot | None = None
         self.latest_motion_ex: MotionExSnapshot | None = None
+        self.latest_lap: LapSnapshot | None = None
         self.active_lap_num: int | None = None
         self.active_invalid = False
+        self.active_game_invalid = False
+        self.active_lap_frames = 0
+        self.active_invalid_frames = 0
+        self.active_invalid_streak = 0
+        self.active_max_invalid_streak = 0
+        self.active_latest_invalid = False
         self.active_sector1_time_ms = 0
         self.active_sector2_time_ms = 0
         self.active_samples: list[LapSample] = []
@@ -161,15 +171,18 @@ class LapCoach:
         reason: str = "New session started.",
         track_id: int | None = None,
         track_length_m: int | None = None,
+        session_type: int | None = None,
     ) -> list[str]:
         self.track_length_m = track_length_m
         self.track_id = track_id
+        self.session_type = session_type
         self.latest_telemetry = None
         self.latest_status = None
         self.latest_motion = None
         self.latest_motion_ex = None
+        self.latest_lap = None
         self.active_lap_num = None
-        self.active_invalid = False
+        self._reset_active_lap_state()
         self.active_sector1_time_ms = 0
         self.active_sector2_time_ms = 0
         self.active_samples = []
@@ -208,28 +221,33 @@ class LapCoach:
 
     def _update_session(self, message: SessionInfo) -> list[str]:
         notices: list[str] = []
+        self.session_type = message.session_type
         track_changed = (
             self.track_length_m is not None
             and message.track_length_m > 0
             and (message.track_length_m != self.track_length_m or message.track_id != self.track_id)
         )
         if track_changed:
+            track_label = self._track_label(message.track_id)
             notices.extend(
                 self.start_new_session(
-                    reason=f"New track detected: reset session for track {message.track_id}.",
+                    reason=f"New track detected: reset session for {track_label}.",
                     track_id=message.track_id,
                     track_length_m=message.track_length_m,
+                    session_type=message.session_type,
                 )
             )
         if message.track_length_m > 0 and message.track_length_m != self.track_length_m:
             self.track_length_m = message.track_length_m
             self.track_id = message.track_id
+            track_label = self._track_label(message.track_id)
             notices.append(
-                f"Session detected: track {message.track_id}, {message.track_length_m} m, {message.total_laps} laps."
+                f"Session detected: {track_label}, {message.track_length_m} m, {message.total_laps} laps."
             )
         elif track_changed:
+            track_label = self._track_label(message.track_id)
             notices.append(
-                f"Session detected: track {message.track_id}, {message.track_length_m} m, {message.total_laps} laps."
+                f"Session detected: {track_label}, {message.track_length_m} m, {message.total_laps} laps."
             )
         self._begin_corner_metadata_load()
         return notices
@@ -238,6 +256,7 @@ class LapCoach:
         notices: list[str] = []
         if lap.driver_status not in {1, 4}:
             return notices
+        self.latest_lap = lap
 
         if self.active_lap_num is None:
             self.active_lap_num = lap.current_lap_num
@@ -249,12 +268,13 @@ class LapCoach:
                 self.completed_laps.append(completed)
                 self.completed_laps = self.completed_laps[-20:]
             self.active_lap_num = lap.current_lap_num
-            self.active_invalid = False
+            self._reset_active_lap_state()
             self.active_sector1_time_ms = 0
             self.active_sector2_time_ms = 0
             self.active_samples = []
 
-        self.active_invalid = self.active_invalid or lap.current_lap_invalid
+        self._record_invalid_flag(lap.current_lap_invalid)
+        self.active_invalid = self._active_lap_invalid()
         if lap.sector1_time_ms > 0:
             self.active_sector1_time_ms = lap.sector1_time_ms
         if lap.sector2_time_ms > 0:
@@ -270,14 +290,52 @@ class LapCoach:
     def _complete_lap(self, new_lap_snapshot: LapSnapshot) -> CompletedLap | None:
         if self.active_lap_num is None or new_lap_snapshot.last_lap_time_ms <= 0:
             return None
+        game_invalid = self._active_lap_game_invalid()
         return CompletedLap(
             lap_num=self.active_lap_num,
             lap_time_ms=new_lap_snapshot.last_lap_time_ms,
             sector1_time_ms=self.active_sector1_time_ms,
             sector2_time_ms=self.active_sector2_time_ms,
-            invalid=self.active_invalid,
+            invalid=self._active_lap_invalid(),
             samples=self._dedupe_samples(self.active_samples),
+            game_invalid=game_invalid,
         )
+
+    def _reset_active_lap_state(self) -> None:
+        self.active_invalid = False
+        self.active_game_invalid = False
+        self.active_lap_frames = 0
+        self.active_invalid_frames = 0
+        self.active_invalid_streak = 0
+        self.active_max_invalid_streak = 0
+        self.active_latest_invalid = False
+
+    def _record_invalid_flag(self, invalid: bool) -> None:
+        self.active_lap_frames += 1
+        self.active_latest_invalid = invalid
+        if invalid:
+            self.active_invalid_frames += 1
+            self.active_invalid_streak += 1
+            self.active_max_invalid_streak = max(self.active_max_invalid_streak, self.active_invalid_streak)
+        else:
+            self.active_invalid_streak = 0
+        self.active_game_invalid = self._active_lap_game_invalid()
+
+    def _active_lap_game_invalid(self) -> bool:
+        if self.active_lap_frames == 0:
+            return False
+        invalid_ratio = self.active_invalid_frames / self.active_lap_frames
+        return self.active_latest_invalid or self.active_max_invalid_streak >= 5 or invalid_ratio >= 0.20
+
+    def _active_lap_invalid(self) -> bool:
+        if not self._active_lap_game_invalid():
+            return False
+        if self._is_practice_session():
+            return False
+        return True
+
+    def _is_practice_session(self) -> bool:
+        return self.session_type in {1, 2, 3, 4}
 
     def _sample_from_lap(self, lap: LapSnapshot) -> LapSample | None:
         telemetry = self.latest_telemetry
@@ -391,6 +449,7 @@ class LapCoach:
         lap_time = self._format_ms(lap.lap_time_ms)
         if lap.invalid:
             return [f"Lap {lap.lap_num}: {lap_time} invalid, ignored for reference."]
+        invalid_note = " (practice-program invalid flag ignored)" if lap.game_invalid else ""
 
         if self.best_lap is None:
             self.best_lap = lap
@@ -398,7 +457,7 @@ class LapCoach:
             self._rebuild_ideal_reference()
             self.latest_insights = self.analyze_lap(lap)
             self.latest_setup_suggestions = self._setup_suggestions(lap, self.reference_profile())
-            return [f"Lap {lap.lap_num}: {lap_time} clean. Set as first personal best."]
+            return [f"Lap {lap.lap_num}: {lap_time} clean{invalid_note}. Set as first personal best."]
 
         previous_best = self.best_lap
         delta_ms = lap.lap_time_ms - previous_best.lap_time_ms
@@ -409,14 +468,16 @@ class LapCoach:
             self._rebuild_ideal_reference()
             self.latest_insights = self.analyze_lap(lap)
             self.latest_setup_suggestions = self._setup_suggestions(lap, self.reference_profile())
-            return [f"Lap {lap.lap_num}: {lap_time} clean, new personal best by {self._format_delta(-delta_ms)}."]
+            return [
+                f"Lap {lap.lap_num}: {lap_time} clean{invalid_note}, new personal best by {self._format_delta(-delta_ms)}."
+            ]
 
         self._rebuild_ideal_reference()
         self.latest_insights = self.analyze_lap(lap)
         reference = self.reference_profile()
         self.latest_setup_suggestions = self._setup_suggestions(lap, reference)
         messages = [
-            f"Lap {lap.lap_num}: {lap_time} clean, {self._format_delta(delta_ms)} slower than personal best.",
+            f"Lap {lap.lap_num}: {lap_time} clean{invalid_note}, {self._format_delta(delta_ms)} slower than personal best.",
             self._sector_summary(lap, previous_best),
         ]
         if reference is not None:
@@ -876,20 +937,29 @@ class LapCoach:
 
     def snapshot(self) -> dict[str, Any]:
         reference = self.reference_profile()
-        current_sample = self.active_samples[-1] if self.active_samples else None
+        current_sample = self._live_sample() or (self.active_samples[-1] if self.active_samples else None)
+        current_samples = self._dedupe_samples(self._current_samples_with_live(current_sample))
         best_lap = self.best_lap
+        map_source, map_samples = self._static_map_samples(reference)
         return {
             "session": {
                 "trackId": self.track_id,
+                "trackName": track_name_for_id(self.track_id),
                 "trackLengthM": self.track_length_m,
+                "sessionType": self.session_type,
             },
             "cornerMetadata": self._corner_metadata_status(),
             "drivingGoal": self.driving_goal,
             "current": {
                 "lapNum": self.active_lap_num,
                 "invalid": self.active_invalid,
+                "gameInvalid": self.active_game_invalid,
                 "sample": self._sample_to_dict(current_sample) if current_sample else None,
-                "samples": [self._sample_to_dict(sample) for sample in self.active_samples[-500:]],
+                "samples": [self._sample_to_dict(sample) for sample in current_samples[-500:]],
+            },
+            "trackMap": {
+                "source": map_source,
+                "samples": [self._sample_to_dict(sample) for sample in map_samples[-900:]],
             },
             "bestLap": self._lap_summary(best_lap) if best_lap else None,
             "reference": self._reference_to_dict(reference) if reference else None,
@@ -926,7 +996,42 @@ class LapCoach:
             "sector2Ms": lap.sector2_time_ms,
             "sector3Ms": lap.sector3_time_ms,
             "invalid": lap.invalid,
+            "gameInvalid": lap.game_invalid,
         }
+
+    def _live_sample(self) -> LapSample | None:
+        if self.latest_lap is None or self.latest_telemetry is None:
+            return None
+        return self._sample_from_lap(self.latest_lap)
+
+    def _current_samples_with_live(self, current_sample: LapSample | None) -> list[LapSample]:
+        if current_sample is None:
+            return self.active_samples
+        if not self.active_samples:
+            return [current_sample]
+        last = self.active_samples[-1]
+        if (
+            last.lap_time_ms == current_sample.lap_time_ms
+            and abs(last.normalized_distance - current_sample.normalized_distance) < 0.0001
+        ):
+            return [*self.active_samples[:-1], current_sample]
+        return [*self.active_samples, current_sample]
+
+    def _static_map_samples(self, reference: ReferenceProfile | None) -> tuple[str | None, list[LapSample]]:
+        if self.external_reference is not None and self._has_world_positions(self.external_reference.samples):
+            return self.external_reference.name, self.external_reference.samples
+        if self.best_lap is not None and self._has_world_positions(self.best_lap.samples):
+            return f"Best lap {self.best_lap.lap_num}", self.best_lap.samples
+        if reference is not None and self._has_world_positions(reference.samples):
+            return reference.name, reference.samples
+        for lap in reversed(self.completed_laps):
+            if not lap.invalid and self._has_world_positions(lap.samples):
+                return f"Lap {lap.lap_num}", lap.samples
+        return None, []
+
+    @staticmethod
+    def _has_world_positions(samples: list[LapSample]) -> bool:
+        return any(sample.world_position is not None for sample in samples)
 
     def _reference_to_dict(self, reference: ReferenceProfile) -> dict[str, Any]:
         return {
@@ -1252,6 +1357,13 @@ class LapCoach:
         if corner_label is None:
             return None
         return corner_label(self.track_id, normalized_distance, self.track_length_m)
+
+    @staticmethod
+    def _track_label(track_id: int | None) -> str:
+        name = track_name_for_id(track_id)
+        if name is not None:
+            return name
+        return f"track {track_id}" if track_id is not None else "unknown track"
 
     @staticmethod
     def _normalize_driving_goal(goal: str) -> str:

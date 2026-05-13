@@ -56,6 +56,53 @@ class LapCoachTests(unittest.TestCase):
         self.assertTrue(any("invalid" in notice for notice in notices))
         self.assertIsNone(coach.best_lap)
 
+    def test_practice_session_invalid_flags_do_not_exclude_lap(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        notices: list[str] = []
+        coach.update(SessionInfo(self.header, 5000, 3, 1, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
+        coach.update(self._lap(lap_num=1, current_ms=10_000, last_ms=0, distance=1000, invalid=True))
+        notices.extend(coach.update(self._lap(lap_num=2, current_ms=100, last_ms=90_000, distance=10, invalid=True)))
+
+        self.assertIsNotNone(coach.best_lap)
+        assert coach.best_lap is not None
+        self.assertFalse(coach.best_lap.invalid)
+        self.assertTrue(coach.best_lap.game_invalid)
+        self.assertTrue(any("practice-program invalid flag ignored" in notice for notice in notices))
+
+    def test_snapshot_uses_track_name(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.update(SessionInfo(self.header, 4940, 12, 10, 3, 0, 22, 30))
+
+        state = coach.snapshot()
+
+        self.assertEqual(state["session"]["trackName"], "Marina Bay Street Circuit")
+
+    def test_live_sample_uses_latest_telemetry(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.update(SessionInfo(self.header, 5000, 3, 10, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=120, throttle=0.2, brake=0.3))
+        coach.update(self._lap(lap_num=1, current_ms=10_000, last_ms=0, distance=1000))
+        coach.update(self._telemetry(speed=240, throttle=0.9, brake=0.0))
+
+        sample = coach.snapshot()["current"]["sample"]
+
+        self.assertIsNotNone(sample)
+        self.assertEqual(sample["speedKmh"], 240)
+        self.assertEqual(sample["throttle"], 0.9)
+
+    def test_track_map_uses_static_best_lap_not_active_trace(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.active_samples = [self._sample(10_000, 0.20, 180, 0.5, 0.0)]
+
+        self.assertEqual(coach.snapshot()["trackMap"]["samples"], [])
+
+        coach.best_lap = self._completed_lap(1, 90_000, slow_second_half=False)
+        state = coach.snapshot()
+
+        self.assertEqual(state["trackMap"]["source"], "Best lap 1")
+        self.assertGreater(len(state["trackMap"]["samples"]), 0)
+
     def test_uses_active_lap_sector_times_when_lap_rolls_over(self) -> None:
         coach = LapCoach(sample_buckets=10)
         coach.update(SessionInfo(self.header, 5000, 0, 10, 3, 0, 22, 30))

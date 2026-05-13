@@ -35,6 +35,48 @@ F1_2024_FASTF1_EVENTS: dict[int, str] = {
     32: "Qatar Grand Prix",
 }
 
+F1_2024_TRACK_NAMES: dict[int, str] = {
+    0: "Albert Park",
+    1: "Circuit Paul Ricard",
+    2: "Shanghai International Circuit",
+    3: "Bahrain International Circuit",
+    4: "Circuit de Barcelona-Catalunya",
+    5: "Circuit de Monaco",
+    6: "Circuit Gilles Villeneuve",
+    7: "Silverstone Circuit",
+    8: "Hockenheimring",
+    9: "Hungaroring",
+    10: "Circuit de Spa-Francorchamps",
+    11: "Autodromo Nazionale Monza",
+    12: "Marina Bay Street Circuit",
+    13: "Suzuka Circuit",
+    14: "Yas Marina Circuit",
+    15: "Circuit of the Americas",
+    16: "Interlagos",
+    17: "Red Bull Ring",
+    18: "Sochi Autodrom",
+    19: "Autodromo Hermanos Rodriguez",
+    20: "Baku City Circuit",
+    21: "Bahrain Short",
+    22: "Silverstone Short",
+    23: "Circuit of the Americas Short",
+    24: "Suzuka Short",
+    25: "Hanoi Street Circuit",
+    26: "Circuit Zandvoort",
+    27: "Autodromo Internazionale Enzo e Dino Ferrari",
+    28: "Autodromo Internacional do Algarve",
+    29: "Jeddah Corniche Circuit",
+    30: "Miami International Autodrome",
+    31: "Las Vegas Strip Circuit",
+    32: "Lusail International Circuit",
+}
+
+
+def track_name_for_id(track_id: int | None) -> str | None:
+    if track_id is None:
+        return None
+    return F1_2024_TRACK_NAMES.get(track_id) or F1_2024_FASTF1_EVENTS.get(track_id)
+
 
 @dataclass(frozen=True, slots=True)
 class CornerMarker:
