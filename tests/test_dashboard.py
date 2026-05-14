@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from f1coach.dashboard import TelemetryRuntime
+from f1coach.dashboard import STATIC_DIR, TelemetryRuntime
 
 
 class TelemetryRuntimeTests(unittest.TestCase):
@@ -33,6 +33,16 @@ class TelemetryRuntimeTests(unittest.TestCase):
 
         self.assertEqual(state["drivingGoal"], "race")
         self.assertIn("Coaching goal set to race pace.", state["notices"])
+
+    def test_dashboard_static_assets_are_present(self) -> None:
+        index = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        css = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
+        js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("F1Coach Garage Review", index)
+        self.assertIn("Delta Circuit", index)
+        self.assertIn(".appShell", css)
+        self.assertIn("function renderReviewHero", js)
 
 
 if __name__ == "__main__":

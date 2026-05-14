@@ -6,7 +6,7 @@ F1Coach is a small Python app that listens to live UDP telemetry from F1 24 and 
 
 - Listens for UDP telemetry on port `20777`.
 - Decodes F1 24 `2024` packet headers plus session, lap, car telemetry, car status, motion, and motion-ex packets.
-- Runs a local dashboard with live speed, gear, throttle, brake, ERS, lap delta, and packet status.
+- Runs a local review dashboard focused on completed laps, delta maps, input traces, priority fixes, and packet status.
 - Plots a 2D track map from live motion packet world positions.
 - Highlights areas of the track where the last lap lost time.
 - Builds an assist-matched `Ideal lap` reference from your own best clean micro-sectors.
@@ -61,7 +61,7 @@ python3 -m pip install -e .
 f1coach dashboard --port 20777 --open-browser
 ```
 
-When you start driving, the app prints packet status, lap completions, and coaching messages. The dashboard updates every half second.
+When you start driving, the app prints packet status, lap completions, and coaching messages. The dashboard is designed for after-lap review rather than live driving inputs.
 
 ## Deployment Model
 
@@ -72,10 +72,10 @@ The practical options are:
 - Run F1Coach locally on the same Wi-Fi/router as the console or PC running the game.
 - Later, split the project into a local telemetry bridge plus a hosted dashboard. The local bridge would receive UDP and stream normalized telemetry to the web app.
 
-## Dashboard Controls
+## Review Dashboard Controls
 
-- `Pause` stops recording/analyzing incoming UDP packets without clearing the current session. Existing laps, the track map, the ideal lap, and analysis stay visible.
-- `Resume` continues recording new packets into the same session.
+- `Pause Capture` stops recording/analyzing incoming UDP packets without clearing the current session. Existing laps, the track map, the ideal lap, and analysis stay visible.
+- `Resume Capture` continues recording new packets into the same session.
 - `Qualifying` / `Race Pace` changes the coaching goal. Qualifying advice is more aggressive about peak lap time and ERS spend; race-pace advice favors repeatable braking, tyre life, and battery use for attack/defense.
 - `New Session` clears the current session when you switch tracks or want a fresh reference.
 

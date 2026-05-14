@@ -22,3 +22,6 @@ f1coach = "f1coach.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["f1coach*"]
+
+[tool.setuptools.package-data]
+f1coach = ["static/*.html", "static/*.css", "static/*.js"]

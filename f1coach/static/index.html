@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>F1Coach Garage Review</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="appShell">
+    <header class="heroBar">
+      <div class="brandLockup">
+        <div class="logoMark" aria-hidden="true">
+          <span></span><span></span><span></span><span></span>
+        </div>
+        <div>
+          <span class="eyebrow">Apex Review Lab</span>
+          <h1>F1Coach</h1>
+          <p id="sessionLine">Waiting for session packet</p>
+        </div>
+      </div>
+
+      <div class="heroControls">
+        <div class="goalToggle" role="group" aria-label="Coaching goal">
+          <button data-goal="qualifying" type="button">Quali</button>
+          <button data-goal="race" type="button">Race</button>
+        </div>
+        <button id="pauseButton" type="button">Pause Capture</button>
+        <button id="newSessionButton" type="button">New Session</button>
+      </div>
+    </header>
+
+    <main class="reviewGrid">
+      <section class="reviewHero">
+        <div class="reviewCopy">
+          <span class="eyebrow">Selected Lap</span>
+          <h2 id="selectedLapTitle">No lap review yet</h2>
+          <p id="selectedLapMeta">Finish a lap to unlock the map, trace, and focus cards.</p>
+        </div>
+        <div class="reviewStats">
+          <div>
+            <span>Lap Time</span>
+            <strong id="reviewLapTime">--</strong>
+          </div>
+          <div>
+            <span>Delta</span>
+            <strong id="reviewDelta">--</strong>
+          </div>
+          <div>
+            <span>Reference</span>
+            <strong id="reviewReference">Pending</strong>
+          </div>
+          <div>
+            <span>Status</span>
+            <strong id="reviewStatus">--</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="lapShelf panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Lap Shelf</span>
+            <h2>Completed Laps</h2>
+          </div>
+        </div>
+        <div id="lapList" class="lapList"></div>
+      </section>
+
+      <section class="circuitPanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Where Time Went</span>
+            <h2>Delta Circuit</h2>
+            <p id="mapHint">Select a completed lap</p>
+          </div>
+          <div class="mapLegend">
+            <span><i class="gain"></i>Gain</span>
+            <span><i class="neutral"></i>Even</span>
+            <span><i class="loss"></i>Loss</span>
+          </div>
+        </div>
+        <canvas id="trackMap" width="980" height="640"></canvas>
+      </section>
+
+      <section class="focusPanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Focus Stack</span>
+            <h2>Priority Fixes</h2>
+          </div>
+        </div>
+        <div id="insights" class="insights"></div>
+      </section>
+
+      <section class="tracePanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Inputs</span>
+            <h2>Lap Trace</h2>
+            <p id="traceHint">Speed, throttle, brake and steering by distance</p>
+          </div>
+          <div class="traceLegend">
+            <span><i class="speedLine"></i>Speed</span>
+            <span><i class="throttleLine"></i>Throttle</span>
+            <span><i class="brakeLine"></i>Brake</span>
+            <span><i class="steerLine"></i>Steer</span>
+          </div>
+        </div>
+        <canvas id="trace" width="980" height="260"></canvas>
+      </section>
+
+      <section class="notesPanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Engineer Notes</span>
+            <h2>Coach Log</h2>
+          </div>
+        </div>
+        <div id="notices" class="feed"></div>
+      </section>
+
+      <section class="signalsPanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Setup Signals</span>
+            <h2>Energy / Balance</h2>
+          </div>
+        </div>
+        <div id="setupInsights" class="feed compact"></div>
+      </section>
+
+      <section class="linkPanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Telemetry Link</span>
+            <h2 id="connectionLabel">No packets</h2>
+          </div>
+          <div class="statusLamp" id="connectionLamp"><span></span></div>
+        </div>
+        <div class="linkBody">
+          <span id="packetStatus">0 packets</span>
+          <span id="senderStatus">No sender</span>
+          <span id="referenceStatus">No reference built</span>
+        </div>
+        <div id="packetMix" class="packetMix"></div>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
