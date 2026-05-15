@@ -34,6 +34,16 @@ class TelemetryRuntimeTests(unittest.TestCase):
         self.assertEqual(state["drivingGoal"], "race")
         self.assertIn("Coaching goal set to race pace.", state["notices"])
 
+    def test_set_theoretical_best_updates_snapshot(self) -> None:
+        runtime = TelemetryRuntime()
+
+        state = runtime.set_theoretical_best(83_456)
+
+        self.assertEqual(state["reference"]["name"], "Theoretical best")
+        self.assertEqual(state["reference"]["source"], "manual-theoretical")
+        self.assertEqual(state["reference"]["lapTimeMs"], 83_456)
+        self.assertEqual(state["reference"]["samples"], [])
+
     def test_dashboard_static_assets_are_present(self) -> None:
         index = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         css = (STATIC_DIR / "app.css").read_text(encoding="utf-8")

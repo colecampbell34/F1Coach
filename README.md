@@ -9,7 +9,7 @@ F1Coach is a small Python app that listens to live UDP telemetry from F1 24 and 
 - Runs a local review dashboard focused on completed laps, delta maps, input traces, priority fixes, and packet status.
 - Plots a 2D track map from live motion packet world positions.
 - Highlights areas of the track where the last lap lost time.
-- Builds an assist-matched `Ideal lap` reference from your own best clean micro-sectors.
+- Lets you enter the game's `Theoretical best` time and compares completed laps against that manual target.
 - Supports imported reference lap JSON when you can get telemetry from another driver or tool.
 - Prints completed-lap summaries with sector deltas and likely time-loss areas.
 
@@ -74,7 +74,7 @@ The practical options are:
 
 ## Review Dashboard Controls
 
-- `Pause Capture` stops recording/analyzing incoming UDP packets without clearing the current session. Existing laps, the track map, the ideal lap, and analysis stay visible.
+- `Pause Capture` stops recording/analyzing incoming UDP packets without clearing the current session. Existing laps, the track map, the improvement target, and analysis stay visible.
 - `Resume Capture` continues recording new packets into the same session.
 - `Qualifying` / `Race Pace` changes the coaching goal. Qualifying advice is more aggressive about peak lap time and ERS spend; race-pace advice favors repeatable braking, tyre life, and battery use for attack/defense.
 - `New Session` clears the current session when you switch tracks or want a fresh reference.
@@ -95,13 +95,11 @@ python3 -m f1coach listen --port 20777 --show-packets
 
 F1Coach uses the best available reference in this order:
 
-1. Imported reference lap JSON passed with `--reference`.
-2. Generated `Ideal lap` from your own clean micro-sectors.
+1. Manual `Theoretical best` entered in the dashboard.
+2. Imported reference lap JSON passed with `--reference`.
 3. Your personal best lap from the current session.
 
-The generated `Ideal lap` is the default target because it can be faster than your best single lap while still matching your exact assists, input device, setup habits, and driving level. It follows the same theoretical-best method used by F1 games: split the lap into timing loops, take the fastest clean loop from any lap in the session, then add those loops together.
-
-The public F1 24 UDP spec exposes lap history and best sector lap numbers, but not the game's private mini-sector loop boundaries or its already-calculated theoretical-best value. F1Coach therefore uses the same algorithm on its own fixed telemetry loops and preserves the source lap for each loop so analysis can explain which previous lap set the reference.
+The dashboard does not calculate a theoretical best from your laps. Enter the theoretical best shown by the game, such as `1:23.456` or `83.456`, and F1Coach uses that as the lap-time target. Because a typed theoretical best has no speed, input, ERS, or position trace, corner-level tips and the delta map still compare your selected lap against your personal-best trace.
 
 External laps are useful, but assists matter. A no-assist wheel lap is often a poor direct target for a controller lap with medium traction control. If you import another driver's reference, include an `assistProfile` in the JSON so the dashboard can make the source clear.
 

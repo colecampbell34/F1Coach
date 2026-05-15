@@ -64,8 +64,8 @@ button.active {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 18px;
-  padding: 18px 22px;
+  gap: 14px;
+  padding: 12px 18px;
   border-bottom: 1px solid var(--line);
   background:
     linear-gradient(90deg, rgba(255,54,94,.20), transparent 34%),
@@ -80,8 +80,8 @@ button.active {
 }
 .logoMark {
   position: relative;
-  width: 54px;
-  height: 54px;
+  width: 46px;
+  height: 46px;
   flex: 0 0 auto;
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -117,6 +117,40 @@ button.active {
   gap: 9px;
   flex-wrap: wrap;
 }
+.theoreticalForm {
+  display: grid;
+  grid-template-columns: auto 96px auto auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0,0,0,.25);
+}
+.theoreticalForm label {
+  padding: 0 3px 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.theoreticalForm input {
+  width: 96px;
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 7px;
+}
+.theoreticalForm button {
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 12px;
+}
 .goalToggle {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -137,19 +171,19 @@ button.active {
 .reviewGrid {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(430px, 1fr) 380px;
-  grid-template-rows: auto minmax(220px, .45fr) minmax(300px, .75fr) 290px 170px;
-  gap: 14px;
-  padding: 14px;
+  grid-template-columns: minmax(430px, 1fr) 360px;
+  grid-template-rows: auto minmax(250px, .48fr) minmax(280px, .70fr) 240px 150px;
+  gap: 10px;
+  padding: 10px;
 }
 .reviewHero {
   grid-column: 1 / -1;
   display: grid;
   grid-template-columns: minmax(260px, 1fr) auto;
-  gap: 16px;
+  gap: 12px;
   align-items: stretch;
-  min-height: 126px;
-  padding: 16px;
+  min-height: 102px;
+  padding: 12px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background:
@@ -159,29 +193,30 @@ button.active {
 .reviewCopy {
   display: grid;
   align-content: center;
-  gap: 7px;
+  gap: 5px;
 }
 .reviewCopy h2 {
   max-width: 760px;
-  font-size: 32px;
+  font-size: 25px;
   line-height: 1.05;
 }
 .reviewCopy p {
   max-width: 760px;
-  line-height: 1.36;
+  line-height: 1.28;
+  font-size: 13px;
 }
 .reviewStats {
   display: grid;
   grid-template-columns: repeat(4, minmax(104px, 1fr));
   gap: 8px;
-  min-width: 500px;
+  min-width: 470px;
 }
 .reviewStats div {
   display: grid;
   align-content: center;
   gap: 6px;
   min-width: 0;
-  padding: 12px;
+  padding: 9px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(8,7,10,.48);
@@ -192,7 +227,7 @@ button.active {
 .reviewStats strong {
   min-width: 0;
   overflow-wrap: anywhere;
-  font-size: 20px;
+  font-size: 16px;
   line-height: 1.05;
 }
 .panel {
@@ -210,8 +245,8 @@ button.active {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 58px;
-  padding: 11px 13px;
+  min-height: 50px;
+  padding: 8px 11px;
   border-bottom: 1px solid var(--line);
 }
 .panelHeader p {
@@ -252,7 +287,7 @@ button.active {
 canvas {
   display: block;
   width: 100%;
-  height: calc(100% - 58px);
+  height: calc(100% - 50px);
   background:
     linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px),
     linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
@@ -284,26 +319,27 @@ canvas {
 .speedLine { background: var(--yellow); }
 .throttleLine { background: var(--green); }
 .brakeLine { background: var(--red); }
-.steerLine { background: var(--cyan); }
 .lapList, .insights, .feed, .packetMix {
   min-height: 0;
-  height: calc(100% - 58px);
+  height: calc(100% - 50px);
   overflow: auto;
-  padding: 10px;
+  padding: 8px;
   display: grid;
   align-content: start;
-  gap: 9px;
+  gap: 7px;
 }
 .lapList {
-  max-height: 260px;
+  max-height: none;
+  grid-auto-rows: min-content;
 }
 .lapCard {
   width: 100%;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 10px;
-  padding: 10px;
+  gap: 8px;
+  min-height: 48px;
+  padding: 7px;
   text-align: left;
   background:
     linear-gradient(90deg, rgba(69,214,255,.10), transparent),
@@ -316,8 +352,8 @@ canvas {
     var(--surface-2);
 }
 .lapBadge {
-  width: 42px;
-  height: 42px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border-radius: 8px;
@@ -328,18 +364,30 @@ canvas {
 .lapCard strong, .lapCard small {
   display: block;
 }
+.lapCard strong {
+  font-size: 14px;
+  line-height: 1.05;
+}
 .lapCard small {
-  margin-top: 3px;
+  margin-top: 2px;
+  font-size: 11px;
+}
+.lapErs {
+  color: var(--cyan);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
 }
 .lapDelta {
   color: var(--yellow);
   font-weight: 800;
+  white-space: nowrap;
 }
 .insight {
   width: 100%;
   display: grid;
-  gap: 6px;
-  padding: 11px;
+  gap: 5px;
+  padding: 9px;
   border: 1px solid var(--line);
   border-left: 5px solid var(--orange);
   border-radius: 8px;
@@ -357,8 +405,8 @@ canvas {
 .insight strong { color: var(--text); }
 .insight span {
   display: block;
-  line-height: 1.35;
-  font-size: 13px;
+  line-height: 1.3;
+  font-size: 12px;
 }
 .insight .area {
   color: var(--yellow);
@@ -366,14 +414,15 @@ canvas {
   font-weight: 800;
 }
 .insight .evidence { color: var(--cyan); }
+.insight .tip { color: var(--text); }
 .insight .setup { color: var(--muted); }
 .feed div, .emptyState {
-  padding: 10px;
+  padding: 8px;
   border-radius: 8px;
   background: var(--surface-2);
   color: var(--text);
-  font-size: 13px;
-  line-height: 1.38;
+  font-size: 12px;
+  line-height: 1.32;
 }
 .emptyState {
   border: 1px dashed var(--line-strong);
@@ -405,8 +454,8 @@ canvas {
 .linkBody {
   display: grid;
   gap: 7px;
-  padding: 10px 12px 0;
-  font-size: 13px;
+  padding: 8px 10px 0;
+  font-size: 12px;
 }
 .packetMix {
   height: auto;
@@ -466,6 +515,10 @@ canvas {
   }
   .heroControls > button, .goalToggle {
     flex: 1 1 150px;
+  }
+  .theoreticalForm {
+    width: 100%;
+    grid-template-columns: 1fr minmax(96px, 1fr) auto auto;
   }
   .reviewGrid {
     padding: 10px;

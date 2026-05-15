@@ -79,7 +79,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"F1Coach UDP listener: udp://{args.bind}:{args.port}")
     dashboard_url = f"http://{args.http_host}:{args.http_port}"
     print(f"Dashboard: {dashboard_url}")
-    print("Start driving in F1 24. Clean laps build an assist-matched ideal reference.")
+    print("Start driving in F1 24. Enter the game's theoretical best in the dashboard when available.")
     if args.open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(dashboard_url)).start()
     try:

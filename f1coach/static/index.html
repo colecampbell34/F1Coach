@@ -14,13 +14,19 @@
           <span></span><span></span><span></span><span></span>
         </div>
         <div>
-          <span class="eyebrow">Apex Review Lab</span>
+          <span class="eyebrow">Review Lab</span>
           <h1>F1Coach</h1>
           <p id="sessionLine">Waiting for session packet</p>
         </div>
       </div>
 
       <div class="heroControls">
+        <form id="theoreticalForm" class="theoreticalForm">
+          <label for="theoreticalInput">Theoretical best</label>
+          <input id="theoreticalInput" type="text" inputmode="decimal" autocomplete="off" placeholder="1:23.456">
+          <button type="submit">Set</button>
+          <button id="clearTheoreticalButton" type="button">Clear</button>
+        </form>
         <div class="goalToggle" role="group" aria-label="Coaching goal">
           <button data-goal="qualifying" type="button">Quali</button>
           <button data-goal="race" type="button">Race</button>
@@ -98,13 +104,12 @@
           <div>
             <span class="eyebrow">Inputs</span>
             <h2>Lap Trace</h2>
-            <p id="traceHint">Speed, throttle, brake and steering by distance</p>
+            <p id="traceHint">Speed, throttle, and brake by distance</p>
           </div>
           <div class="traceLegend">
             <span><i class="speedLine"></i>Speed</span>
             <span><i class="throttleLine"></i>Throttle</span>
             <span><i class="brakeLine"></i>Brake</span>
-            <span><i class="steerLine"></i>Steer</span>
           </div>
         </div>
         <canvas id="trace" width="980" height="260"></canvas>

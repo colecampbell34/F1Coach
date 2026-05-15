@@ -83,6 +83,12 @@ class TelemetryRuntime:
             self.coach._record_notices(notices)
             return self._snapshot_unlocked()
 
+    def set_theoretical_best(self, lap_time_ms: int | None) -> dict[str, Any]:
+        with self.lock:
+            notices = self.coach.set_manual_theoretical_best(lap_time_ms)
+            self.coach._record_notices(notices)
+            return self._snapshot_unlocked()
+
     def _snapshot_unlocked(self) -> dict[str, Any]:
         state = self.coach.snapshot()
         state["packets"] = dict(self.packet_counts)
@@ -154,6 +160,14 @@ def serve_dashboard(runtime: TelemetryRuntime, host: str, port: int) -> Threadin
                     self.send_error(400, str(exc))
                     return
                 self._send("application/json; charset=utf-8", json.dumps(state))
+            elif action == "set-theoretical-best":
+                try:
+                    lap_time_ms = _manual_lap_time_ms(body.get("lapTimeMs"))
+                    state = runtime.set_theoretical_best(lap_time_ms)
+                except ValueError as exc:
+                    self.send_error(400, str(exc))
+                    return
+                self._send("application/json; charset=utf-8", json.dumps(state))
             else:
                 self.send_error(400, "Unknown control action")
 
@@ -185,3 +199,15 @@ def packet_name_for(packet_id: int) -> str:
         return PacketId(packet_id).name.lower()
     except ValueError:
         return f"unknown_{packet_id}"
+
+
+def _manual_lap_time_ms(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        lap_time_ms = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid theoretical best time.") from exc
+    if lap_time_ms <= 0:
+        raise ValueError("Theoretical best must be greater than zero.")
+    return lap_time_ms

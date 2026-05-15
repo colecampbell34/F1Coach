@@ -3,6 +3,9 @@ const mapCanvas = document.getElementById("trackMap");
 const traceCanvas = document.getElementById("trace");
 const pauseButton = document.getElementById("pauseButton");
 const newSessionButton = document.getElementById("newSessionButton");
+const theoreticalForm = document.getElementById("theoreticalForm");
+const theoreticalInput = document.getElementById("theoreticalInput");
+const clearTheoreticalButton = document.getElementById("clearTheoreticalButton");
 const goalButtons = Array.from(document.querySelectorAll("[data-goal]"));
 let selectedLapNum = null;
 let selectedInsightIndex = null;
@@ -20,11 +23,28 @@ function initControls() {
     await refresh();
   });
   newSessionButton.addEventListener("click", async () => {
-    const confirmed = window.confirm("Start a new session? This clears session laps, map data, and the ideal reference.");
+    const confirmed = window.confirm("Start a new session? This clears session laps, map data, and the theoretical best.");
     if (!confirmed) return;
     selectedLapNum = null;
     selectedInsightIndex = null;
     await sendControl("new-session");
+    await refresh();
+  });
+  theoreticalForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    const lapTimeMs = parseLapTimeInput(theoreticalInput.value);
+    if (lapTimeMs === null) {
+      theoreticalInput.setCustomValidity("Enter a lap time like 1:23.456 or 83.456");
+      theoreticalInput.reportValidity();
+      return;
+    }
+    theoreticalInput.setCustomValidity("");
+    await sendControl("set-theoretical-best", { lapTimeMs });
+    await refresh();
+  });
+  clearTheoreticalButton.addEventListener("click", async () => {
+    theoreticalInput.value = "";
+    await sendControl("set-theoretical-best", { lapTimeMs: null });
     await refresh();
   });
 }
@@ -70,6 +90,9 @@ function renderSession(state) {
   document.getElementById("referenceStatus").textContent = state.reference
     ? `${state.reference.name} · ${state.reference.lapTime}`
     : "No reference built";
+  if (document.activeElement !== theoreticalInput) {
+    theoreticalInput.value = state.reference && state.reference.source === "manual-theoretical" ? state.reference.lapTime : "";
+  }
 
   const lamp = document.getElementById("connectionLamp");
   lamp.classList.toggle("connected", packets > 0 && !state.paused);
@@ -84,6 +107,8 @@ function renderSession(state) {
 
 function renderReviewHero(state, selectedLap) {
   const reference = state.reference;
+  const referenceLabel = reference ? `${reference.name} ${reference.lapTime}` : "Set target";
+  const bestDelta = reference && state.bestLap ? fmtMs(state.bestLap.lapTimeMs - reference.lapTimeMs) : null;
   const title = document.getElementById("selectedLapTitle");
   const meta = document.getElementById("selectedLapMeta");
   if (!selectedLap) {
@@ -91,7 +116,7 @@ function renderReviewHero(state, selectedLap) {
     meta.textContent = "Finish a lap to unlock the map, trace, and focus cards.";
     setText("reviewLapTime", "--");
     setText("reviewDelta", "--");
-    setText("reviewReference", reference ? reference.name : "Pending");
+    setText("reviewReference", bestDelta ? `${referenceLabel} (${bestDelta} vs PB)` : referenceLabel);
     setText("reviewStatus", "--");
     return;
   }
@@ -100,11 +125,11 @@ function renderReviewHero(state, selectedLap) {
     ? `Lap ${selectedLap.lapNum}: ${titleCase(insight.category)} at ${insight.area}`
     : `Lap ${selectedLap.lapNum} review`;
   meta.textContent = insight
-    ? `${insight.recommendation} ${insight.evidence}`
+    ? `${insight.detail} ${insight.recommendation}`
     : "No major time-loss segment was detected against the current reference.";
   setText("reviewLapTime", selectedLap.lapTime);
   setText("reviewDelta", fmtMs(selectedLap.deltaToReferenceMs));
-  setText("reviewReference", reference ? reference.name : "Pending");
+  setText("reviewReference", bestDelta ? `${referenceLabel} (${bestDelta} vs PB)` : referenceLabel);
   setText("reviewStatus", lapStatus(selectedLap));
 }
 
@@ -151,7 +176,8 @@ function renderInsights(insights) {
     });
     appendText(button, "strong", `${titleCase(item.category)} · ${fmtMs(item.time_delta_ms)}`);
     appendText(button, "span", item.area || `${Math.round(item.start_pct)}-${Math.round(item.end_pct)}% lap`, "area");
-    appendText(button, "span", specificTip(item));
+    appendText(button, "span", item.detail || specificTip(item), "tip");
+    appendText(button, "span", item.recommendation || specificTip(item));
     appendText(button, "span", item.evidence || "", "evidence");
     if (item.reference_source) appendText(button, "span", item.reference_source, "evidence");
     if (item.setup_hint) appendText(button, "span", shortSentence(item.setup_hint), "setup");
@@ -200,10 +226,13 @@ function renderLaps(laps) {
     const copy = document.createElement("span");
     appendText(copy, "strong", lap.lapTime);
     appendText(copy, "small", lapStatus(lap));
+    const ers = document.createElement("span");
+    ers.className = "lapErs";
+    ers.textContent = fmtErs(lap.ersUsedKj);
     const delta = document.createElement("span");
     delta.className = "lapDelta";
     delta.textContent = fmtMs(lap.deltaToReferenceMs);
-    button.append(badge, copy, delta);
+    button.append(badge, copy, ers, delta);
     target.appendChild(button);
   }
 }
@@ -230,9 +259,9 @@ function renderMap(state, selectedLap) {
   const selectedSamples = orderedMapSamples(selectedLap && selectedLap.samples || []);
   const fallbackSamples = orderedMapSamples(state.trackMap && state.trackMap.samples || []);
   const ref = selectedSamples.length ? selectedSamples : fallbackSamples;
-  const referenceSamples = orderedSamples(state.reference && state.reference.samples || []);
+  const referenceSamples = referenceTraceSamples(state);
   document.getElementById("mapHint").textContent = selectedLap
-    ? `Lap ${selectedLap.lapNum} vs ${state.reference ? state.reference.name : "reference pending"}`
+    ? `Lap ${selectedLap.lapNum} trace vs ${referenceSamples.length ? traceReferenceLabel(state) : "reference pending"}`
     : "Complete a lap with motion packets";
   if (ref.length < 2) {
     centerText(ctx, w, h, "No lap map available yet");
@@ -242,7 +271,7 @@ function renderMap(state, selectedLap) {
   drawGroupedPath(ctx, ref, bounds, "#2e2738", 11);
   drawGroupedPath(ctx, ref, bounds, "#111016", 7);
   if (selectedSamples.length >= 2 && referenceSamples.length) {
-    drawDeltaPath(ctx, selectedSamples, referenceSamples, bounds);
+    drawDeltaPath(ctx, selectedSamples, referenceSamples, bounds, selectedLap.deltaToReferenceMs);
   } else if (selectedSamples.length >= 2) {
     drawGroupedPath(ctx, selectedSamples, bounds, "#45d6ff", 5);
   } else {
@@ -262,9 +291,9 @@ function renderTrace(state, selectedLap) {
   const h = traceCanvas.height;
   clearCanvas(ctx, w, h);
   const samples = selectedLap && selectedLap.samples ? orderedSamples(selectedLap.samples) : [];
-  const referenceSamples = orderedSamples(state.reference && state.reference.samples || []);
+  const referenceSamples = referenceTraceSamples(state);
   document.getElementById("traceHint").textContent = selectedLap
-    ? `Lap ${selectedLap.lapNum} inputs by distance`
+    ? `Lap ${selectedLap.lapNum} speed, throttle, and brake by distance`
     : "Select a completed lap";
   drawTraceGrid(ctx, w, h);
   const selectedInsight = (state.insights || [])[selectedInsightIndex];
@@ -281,7 +310,6 @@ function renderTrace(state, selectedLap) {
   drawSpeedTrace(ctx, samples, w, h, "#ffd166", 2.5);
   drawTrace(ctx, samples, w, h, "throttle", 1, "#3ff09a", 2);
   drawTrace(ctx, samples, w, h, "brake", 1, "#ff365e", 2);
-  drawTrace(ctx, samples, w, h, "steerAbs", 1, "#45d6ff", 1.5);
 }
 
 function drawTraceGrid(ctx, w, h) {
@@ -322,7 +350,7 @@ function drawTrace(ctx, samples, w, h, key, max, color, width) {
   ctx.lineWidth = width;
   ctx.beginPath();
   samples.forEach((s, i) => {
-    const raw = key === "steerAbs" ? Math.abs(s.steer || 0) : s[key];
+    const raw = s[key];
     const x = 42 + s.normalizedDistance * (w - 70);
     const y = h - 24 - Math.max(0, Math.min(1, (raw || 0) / max)) * (h - 52);
     if (i === 0) ctx.moveTo(x, y);
@@ -338,21 +366,24 @@ function shadeTraceSegment(ctx, w, h, start, end) {
   ctx.fillRect(x, 8, width, h - 34);
 }
 
-function drawDeltaPath(ctx, samples, referenceSamples, bounds) {
+function drawDeltaPath(ctx, samples, referenceSamples, bounds, lapDeltaToTargetMs = null) {
   ctx.lineWidth = 7;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
+  const slowerThanManualTarget = lapDeltaToTargetMs !== null && lapDeltaToTargetMs > 0;
   for (const group of sampleGroups(samples)) {
     for (let i = 1; i < group.length; i += 1) {
       const previous = group[i - 1];
       const current = group[i];
       const refPreviousMs = timeAtDistance(referenceSamples, previous.normalizedDistance);
       const refCurrentMs = timeAtDistance(referenceSamples, current.normalizedDistance);
-      if (refPreviousMs === null || refCurrentMs === null) continue;
       const lapSegmentMs = current.lapTimeMs - previous.lapTimeMs;
-      const refSegmentMs = refCurrentMs - refPreviousMs;
-      if (lapSegmentMs <= 0 || refSegmentMs <= 0) continue;
-      ctx.strokeStyle = deltaColor(lapSegmentMs - refSegmentMs);
+      let deltaMs = null;
+      if (refPreviousMs !== null && refCurrentMs !== null) {
+        const refSegmentMs = refCurrentMs - refPreviousMs;
+        if (lapSegmentMs > 0 && refSegmentMs > 0) deltaMs = lapSegmentMs - refSegmentMs;
+      }
+      ctx.strokeStyle = deltaMs === null ? "#ffd166" : deltaColor(deltaMs, slowerThanManualTarget);
       const [x1, y1] = project(previous, bounds);
       const [x2, y2] = project(current, bounds);
       ctx.beginPath();
@@ -387,6 +418,18 @@ function selectedLapFromState(state) {
   const selectable = laps.filter(lap => lap.samples && lap.samples.length);
   if (selectedLapNum === null && selectable.length) selectedLapNum = selectable[selectable.length - 1].lapNum;
   return selectable.find(lap => lap.lapNum === selectedLapNum) || selectable[selectable.length - 1] || null;
+}
+
+function referenceTraceSamples(state) {
+  if (state.reference && state.reference.samples && state.reference.samples.length) {
+    return orderedSamples(state.reference.samples);
+  }
+  return orderedSamples(state.trackMap && state.trackMap.samples || []);
+}
+
+function traceReferenceLabel(state) {
+  if (state.reference && state.reference.samples && state.reference.samples.length) return state.reference.name || "reference";
+  return state.trackMap && state.trackMap.source ? state.trackMap.source : "personal best";
 }
 
 function orderedSamples(samples) {
@@ -456,9 +499,9 @@ function timeAtDistance(samples, distance) {
   return ordered[ordered.length - 1].lapTimeMs;
 }
 
-function deltaColor(deltaMs) {
-  if (deltaMs <= -50) return "#3ff09a";
-  if (deltaMs >= 80) return "#ff365e";
+function deltaColor(deltaMs, suppressGain = false) {
+  if (!suppressGain && deltaMs <= -25) return "#3ff09a";
+  if (deltaMs >= 120) return "#ff365e";
   return "#ffd166";
 }
 
@@ -502,6 +545,30 @@ function fmtMs(ms) {
   if (ms === null || ms === undefined) return "--";
   const sign = ms > 0 ? "+" : ms < 0 ? "-" : "";
   return sign + (Math.abs(ms) / 1000).toFixed(2) + "s";
+}
+
+function fmtErs(kj) {
+  if (kj === null || kj === undefined) return "ERS --";
+  if (kj >= 1000) return `ERS ${(kj / 1000).toFixed(1)} MJ`;
+  return `ERS ${Math.round(kj)} kJ`;
+}
+
+function parseLapTimeInput(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const parts = text.split(":");
+  if (parts.length > 2) return null;
+  let seconds;
+  if (parts.length === 2) {
+    const minutes = Number(parts[0]);
+    const sec = Number(parts[1]);
+    if (!Number.isFinite(minutes) || !Number.isFinite(sec) || minutes < 0 || sec < 0 || sec >= 60) return null;
+    seconds = minutes * 60 + sec;
+  } else {
+    seconds = Number(parts[0]);
+    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  }
+  return Math.round(seconds * 1000);
 }
 
 function titleCase(text) {

@@ -123,12 +123,10 @@ class LapCoach:
         self,
         sample_buckets: int = 240,
         external_reference: ReferenceProfile | None = None,
-        theoretical_loop_count: int = 60,
         driving_goal: str = "qualifying",
         corner_metadata: Any | None = None,
     ) -> None:
         self.sample_buckets = sample_buckets
-        self.theoretical_loop_count = theoretical_loop_count
         self.driving_goal = self._normalize_driving_goal(driving_goal)
         self.corner_metadata = corner_metadata
         self.track_length_m: int | None = None
@@ -197,6 +195,31 @@ class LapCoach:
         self.last_hint_at = 0.0
         self._begin_corner_metadata_load()
         return [reason]
+
+    def set_manual_theoretical_best(self, lap_time_ms: int | None) -> list[str]:
+        if lap_time_ms is None:
+            self.ideal_reference = None
+            self.latest_insights = []
+            self.latest_setup_suggestions = []
+            return ["Manual theoretical best cleared."]
+        if lap_time_ms <= 0:
+            raise ValueError("Theoretical best must be greater than zero.")
+        self.ideal_reference = ReferenceProfile(
+            name="Theoretical best",
+            source="manual-theoretical",
+            lap_time_ms=lap_time_ms,
+            sector1_time_ms=0,
+            sector2_time_ms=0,
+            samples=[],
+            synthetic=False,
+        )
+        self.latest_insights = self.analyze_lap(self.completed_laps[-1], self._analysis_reference_profile()) if self.completed_laps else []
+        self.latest_setup_suggestions = (
+            self._setup_suggestions(self.completed_laps[-1], self._analysis_reference_profile())
+            if self.completed_laps
+            else []
+        )
+        return [f"Manual theoretical best set to {self._format_ms(lap_time_ms)}."]
 
     def update(self, message: TelemetryMessage) -> list[str]:
         if isinstance(message, SessionInfo):
@@ -400,7 +423,7 @@ class LapCoach:
 
     def _live_hint(self, sample: LapSample) -> str | None:
         now = monotonic()
-        reference = self.reference_profile()
+        reference = self._analysis_reference_profile()
         if reference is None or now - self.last_hint_at < 1.2:
             return None
         reference_sample = self._reference_sample(reference.samples, sample.normalized_distance)
@@ -456,9 +479,9 @@ class LapCoach:
         if self.best_lap is None:
             self.best_lap = lap
             self.clean_laps.append(lap)
-            self._rebuild_ideal_reference()
-            self.latest_insights = self.analyze_lap(lap)
-            self.latest_setup_suggestions = self._setup_suggestions(lap, self.reference_profile())
+            analysis_reference = self._analysis_reference_profile()
+            self.latest_insights = self.analyze_lap(lap, analysis_reference)
+            self.latest_setup_suggestions = self._setup_suggestions(lap, analysis_reference)
             return [f"Lap {lap.lap_num}: {lap_time} clean{invalid_note}. Set as first personal best."]
 
         previous_best = self.best_lap
@@ -467,17 +490,17 @@ class LapCoach:
         self.clean_laps = self.clean_laps[-30:]
         if delta_ms < 0:
             self.best_lap = lap
-            self._rebuild_ideal_reference()
-            self.latest_insights = self.analyze_lap(lap)
-            self.latest_setup_suggestions = self._setup_suggestions(lap, self.reference_profile())
+            analysis_reference = self._analysis_reference_profile()
+            self.latest_insights = self.analyze_lap(lap, analysis_reference)
+            self.latest_setup_suggestions = self._setup_suggestions(lap, analysis_reference)
             return [
                 f"Lap {lap.lap_num}: {lap_time} clean{invalid_note}, new personal best by {self._format_delta(-delta_ms)}."
             ]
 
-        self._rebuild_ideal_reference()
-        self.latest_insights = self.analyze_lap(lap)
         reference = self.reference_profile()
-        self.latest_setup_suggestions = self._setup_suggestions(lap, reference)
+        analysis_reference = self._analysis_reference_profile()
+        self.latest_insights = self.analyze_lap(lap, analysis_reference)
+        self.latest_setup_suggestions = self._setup_suggestions(lap, analysis_reference)
         messages = [
             f"Lap {lap.lap_num}: {lap_time} clean{invalid_note}, {self._format_delta(delta_ms)} slower than personal best.",
             self._sector_summary(lap, previous_best),
@@ -556,96 +579,20 @@ class LapCoach:
         return sorted(insights, key=lambda insight: insight.time_delta_ms, reverse=True)[:2]
 
     def reference_profile(self) -> ReferenceProfile | None:
-        if self.external_reference is not None:
-            return self.external_reference
         if self.ideal_reference is not None:
             return self.ideal_reference
+        if self.external_reference is not None:
+            return self.external_reference
         if self.best_lap is not None:
             return self._profile_from_lap(self.best_lap, "Personal best", "personal-best")
         return None
 
-    def _rebuild_ideal_reference(self) -> None:
-        clean_laps = [lap for lap in self.clean_laps if not lap.invalid and len(lap.samples) >= 20]
-        if not clean_laps:
-            self.ideal_reference = None
-            return
-
-        sector_winners = self._sector_winners(clean_laps)
-        if len(sector_winners) != 3:
-            self.ideal_reference = None
-            return
-
-        by_bucket: dict[int, LapSample] = {}
-        raw_samples: list[LapSample] = []
-        segments: list[TheoreticalSegment] = []
-        cumulative_time_ms = 0
-        for index, (lap, segment_start_ms, segment_end_ms, segment_time_ms) in enumerate(sector_winners, start=1):
-            segment_samples = self._samples_between_times(lap.samples, segment_start_ms, segment_end_ms)
-            if not segment_samples:
-                continue
-            segments.append(
-                TheoreticalSegment(
-                    index=index,
-                    start_pct=segment_samples[0].normalized_distance * 100,
-                    end_pct=segment_samples[-1].normalized_distance * 100,
-                    source_lap_num=lap.lap_num,
-                    segment_time_ms=segment_time_ms,
-                )
-            )
-            for sample in segment_samples:
-                progress_ms = max(0, sample.lap_time_ms - segment_start_ms)
-                raw_samples.append(self._clone_sample(sample, lap_time_ms=cumulative_time_ms + progress_ms))
-            cumulative_time_ms += segment_time_ms
-
-        for sample in raw_samples:
-            by_bucket[self._bucket(sample.normalized_distance)] = sample
-
-        samples = [by_bucket[bucket] for bucket in sorted(by_bucket)]
-        if len(samples) < 20 or cumulative_time_ms <= 0:
-            self.ideal_reference = None
-            return
-
-        adjusted: list[LapSample] = []
-        previous_time_ms = 0
-        for sample in samples:
-            lap_time_ms = max(sample.lap_time_ms, previous_time_ms + 1)
-            previous_time_ms = lap_time_ms
-            adjusted.append(
-                self._clone_sample(sample, lap_time_ms=lap_time_ms)
-            )
-
-        sector1_ms = sector_winners[0][3]
-        sector2_ms = sector_winners[1][3]
-        self.ideal_reference = ReferenceProfile(
-            name="Ideal lap",
-            source="best-sectors",
-            lap_time_ms=cumulative_time_ms,
-            sector1_time_ms=sector1_ms,
-            sector2_time_ms=sector2_ms,
-            samples=adjusted,
-            lap_count=len(clean_laps),
-            synthetic=True,
-            segments=segments,
-        )
-
-    def _sector_winners(self, clean_laps: list[CompletedLap]) -> list[tuple[CompletedLap, int, int, int]]:
-        sector_ranges: list[list[tuple[CompletedLap, int, int, int]]] = [[], [], []]
-        for lap in clean_laps:
-            sector1_ms = lap.sector1_time_ms
-            sector2_ms = lap.sector2_time_ms
-            sector3_ms = lap.sector3_time_ms
-            if sector1_ms > 0:
-                sector_ranges[0].append((lap, 0, sector1_ms, sector1_ms))
-            if sector2_ms > 0:
-                sector_ranges[1].append((lap, sector1_ms, sector1_ms + sector2_ms, sector2_ms))
-            if sector3_ms > 0:
-                sector_ranges[2].append((lap, sector1_ms + sector2_ms, lap.lap_time_ms, sector3_ms))
-        winners: list[tuple[CompletedLap, int, int, int]] = []
-        for options in sector_ranges:
-            if not options:
-                return []
-            winners.append(min(options, key=lambda option: option[3]))
-        return winners
+    def _analysis_reference_profile(self) -> ReferenceProfile | None:
+        if self.external_reference is not None and self.external_reference.samples:
+            return self.external_reference
+        if self.best_lap is not None:
+            return self._profile_from_lap(self.best_lap, "Personal best", "personal-best")
+        return None
 
     def _classify_segment(
         self,
@@ -695,10 +642,16 @@ class LapCoach:
             evidence_parts.append(f"ERS {ers_delta_kj:+.0f} kJ")
         evidence = ", ".join(evidence_parts)
 
-        if exit_phase and ers_delta_kj is not None and ers_delta_kj < -35 and avg_speed_delta < -4 and avg_throttle > 0.65:
+        full_throttle_ers_zone = avg_throttle > 0.80 and avg_brake < 0.08 and avg_slip < 0.24
+        if (
+            ers_delta_kj is not None
+            and ers_delta_kj < -20
+            and avg_speed_delta < -4
+            and (exit_phase or full_throttle_ers_zone)
+        ):
             category = "ERS deployment"
             detail = (
-                f"{area}: lost {delta_ms / 1000:.2f}s on corner exit with {abs(ers_delta_kj):.0f} kJ less ERS deployed."
+                f"{area}: lost {delta_ms / 1000:.2f}s with {abs(ers_delta_kj):.0f} kJ less ERS deployed."
             )
             recommendation = (
                 "Use more deploy as the car is straightening and traction is stable; avoid saving battery through the "
@@ -838,14 +791,6 @@ class LapCoach:
     def _samples_between(self, samples: list[LapSample], start: float, end: float) -> list[LapSample]:
         return [sample for sample in samples if start <= sample.normalized_distance <= end]
 
-    @staticmethod
-    def _samples_between_times(samples: list[LapSample], start_ms: int, end_ms: int) -> list[LapSample]:
-        return [
-            sample
-            for sample in sorted(samples, key=lambda item: item.lap_time_ms)
-            if start_ms <= sample.lap_time_ms <= end_ms
-        ]
-
     def _setup_suggestions(self, lap: CompletedLap, reference: ReferenceProfile | None) -> list[str]:
         if reference is None or not lap.samples or not reference.samples:
             return []
@@ -893,8 +838,8 @@ class LapCoach:
             return None
         source_laps = sorted({segment.source_lap_num for segment in overlapping})
         if len(source_laps) == 1:
-            return f"reference sector from lap {source_laps[0]}"
-        return "reference sectors from laps " + ", ".join(str(lap_num) for lap_num in source_laps[:3])
+            return f"reference segment from lap {source_laps[0]}"
+        return "reference segments from laps " + ", ".join(str(lap_num) for lap_num in source_laps[:3])
 
     def _ers_used(self, samples: list[LapSample]) -> float | None:
         values = [sample.ers_deployed_this_lap_j for sample in samples if sample.ers_deployed_this_lap_j is not None]

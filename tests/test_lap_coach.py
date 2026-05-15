@@ -141,7 +141,7 @@ class LapCoachTests(unittest.TestCase):
         )
         coach.completed_laps = [lap]
         coach.best_lap = lap
-        coach.ideal_reference = ReferenceProfile("Ideal lap", "test", 90_000, 29_000, 30_000, lap.samples)
+        coach.set_manual_theoretical_best(90_000)
 
         summary = coach.snapshot()["completedLaps"][0]
 
@@ -188,56 +188,34 @@ class LapCoachTests(unittest.TestCase):
         self.assertIsNone(coach.reference_profile())
         self.assertEqual(coach.completed_laps, [])
 
-    def test_builds_ideal_reference_from_best_sectors(self) -> None:
+    def test_manual_theoretical_best_sets_time_only_reference(self) -> None:
+        coach = LapCoach(sample_buckets=60)
+
+        notices = coach.set_manual_theoretical_best(87_654)
+
+        reference = coach.reference_profile()
+        self.assertIsNotNone(reference)
+        assert reference is not None
+        self.assertEqual(reference.name, "Theoretical best")
+        self.assertEqual(reference.source, "manual-theoretical")
+        self.assertEqual(reference.lap_time_ms, 87_654)
+        self.assertEqual(reference.samples, [])
+        self.assertIn("Manual theoretical best set", notices[0])
+
+    def test_completed_laps_do_not_auto_calculate_theoretical_best(self) -> None:
         coach = LapCoach(sample_buckets=30)
         lap_a = self._completed_lap(1, 90_000, slow_second_half=True)
         lap_b = self._completed_lap(2, 89_000, slow_second_half=False)
-        coach.clean_laps = [lap_a, lap_b]
+        coach.clean_laps = [lap_a]
+        coach.best_lap = lap_a
 
-        coach._rebuild_ideal_reference()
+        coach._summarize_completed_lap(lap_b)
 
-        self.assertIsNotNone(coach.ideal_reference)
-        assert coach.ideal_reference is not None
-        self.assertEqual(coach.ideal_reference.name, "Ideal lap")
-        self.assertLessEqual(coach.ideal_reference.lap_time_ms, 89_000)
-        self.assertEqual(coach.ideal_reference.source, "best-sectors")
-        self.assertEqual(len(coach.ideal_reference.segments), 3)
-        self.assertTrue(all(segment.source_lap_num in {1, 2} for segment in coach.ideal_reference.segments))
-
-    def test_ideal_lap_sums_fastest_sector_times_only(self) -> None:
-        coach = LapCoach(sample_buckets=60)
-        lap_a = CompletedLap(
-            1,
-            90_000,
-            28_000,
-            32_000,
-            False,
-            self._piecewise_samples([28_000, 32_000, 30_000]),
-        )
-        lap_b = CompletedLap(
-            2,
-            87_000,
-            31_000,
-            29_000,
-            False,
-            self._piecewise_samples([31_000, 29_000, 27_000]),
-        )
-        lap_c = CompletedLap(
-            3,
-            88_000,
-            30_000,
-            30_000,
-            False,
-            self._piecewise_samples([30_000, 30_000, 28_000]),
-        )
-        coach.clean_laps = [lap_a, lap_b, lap_c]
-
-        coach._rebuild_ideal_reference()
-
-        self.assertIsNotNone(coach.ideal_reference)
-        assert coach.ideal_reference is not None
-        self.assertEqual(coach.ideal_reference.lap_time_ms, 84_000)
-        self.assertEqual([segment.source_lap_num for segment in coach.ideal_reference.segments], [1, 2, 2])
+        reference = coach.reference_profile()
+        self.assertIsNotNone(reference)
+        assert reference is not None
+        self.assertEqual(reference.source, "personal-best")
+        self.assertEqual(reference.lap_time_ms, 89_000)
 
     def test_identifies_ers_underuse_on_corner_exit(self) -> None:
         coach = LapCoach(sample_buckets=30)
