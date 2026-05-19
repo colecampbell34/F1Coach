@@ -3,50 +3,31 @@ const mapCanvas = document.getElementById("trackMap");
 const traceCanvas = document.getElementById("trace");
 const pauseButton = document.getElementById("pauseButton");
 const newSessionButton = document.getElementById("newSessionButton");
-const theoreticalForm = document.getElementById("theoreticalForm");
-const theoreticalInput = document.getElementById("theoreticalInput");
-const clearTheoreticalButton = document.getElementById("clearTheoreticalButton");
 const goalButtons = Array.from(document.querySelectorAll("[data-goal]"));
+const appError = document.getElementById("appError");
 let selectedLapNum = null;
 let selectedInsightIndex = null;
 
 function initControls() {
   goalButtons.forEach(button => {
-    button.addEventListener("click", async () => {
+    button.addEventListener("click", () => withUiError(async () => {
       await sendControl("set-goal", { goal: button.dataset.goal });
       await refresh();
-    });
+    }));
   });
-  pauseButton.addEventListener("click", async () => {
+  pauseButton.addEventListener("click", () => withUiError(async () => {
     const paused = pauseButton.dataset.paused === "true";
     await sendControl(paused ? "resume" : "pause");
     await refresh();
-  });
-  newSessionButton.addEventListener("click", async () => {
+  }));
+  newSessionButton.addEventListener("click", () => withUiError(async () => {
     const confirmed = window.confirm("Start a new session? This clears session laps, map data, and the theoretical best.");
     if (!confirmed) return;
     selectedLapNum = null;
     selectedInsightIndex = null;
     await sendControl("new-session");
     await refresh();
-  });
-  theoreticalForm.addEventListener("submit", async event => {
-    event.preventDefault();
-    const lapTimeMs = parseLapTimeInput(theoreticalInput.value);
-    if (lapTimeMs === null) {
-      theoreticalInput.setCustomValidity("Enter a lap time like 1:23.456 or 83.456");
-      theoreticalInput.reportValidity();
-      return;
-    }
-    theoreticalInput.setCustomValidity("");
-    await sendControl("set-theoretical-best", { lapTimeMs });
-    await refresh();
-  });
-  clearTheoreticalButton.addEventListener("click", async () => {
-    theoreticalInput.value = "";
-    await sendControl("set-theoretical-best", { lapTimeMs: null });
-    await refresh();
-  });
+  }));
 }
 
 async function sendControl(action, payload = {}) {
@@ -55,22 +36,30 @@ async function sendControl(action, payload = {}) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, ...payload }),
   });
-  if (!response.ok) throw new Error(`Control action failed: ${action}`);
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(cleanErrorText(detail) || `Control action failed: ${action}`);
+  }
 }
 
 async function refresh() {
   const response = await fetch(stateUrl, { cache: "no-store" });
+  if (!response.ok) throw new Error(`State request failed: ${response.status}`);
   const state = await response.json();
   const selectedLap = selectedLapFromState(state);
+  const selectedInsights = selectedLapInsights(state, selectedLap);
+  if (selectedInsightIndex !== null && selectedInsightIndex >= selectedInsights.length) selectedInsightIndex = null;
+  clearAppError();
   renderSession(state);
-  renderReviewHero(state, selectedLap);
+  renderReviewHero(state, selectedLap, selectedInsights);
   renderPacketMix(state);
-  renderInsights(state.insights || []);
+  renderDiagnostics(state.diagnostics || []);
+  renderInsights(selectedInsights);
   renderSetupInsights(state.setupInsights || []);
   renderLaps(state.completedLaps || []);
   renderFeed(state.notices || []);
-  renderMap(state, selectedLap);
-  renderTrace(state, selectedLap);
+  renderMap(state, selectedLap, selectedInsights);
+  renderTrace(state, selectedLap, selectedInsights);
 }
 
 function renderSession(state) {
@@ -90,9 +79,6 @@ function renderSession(state) {
   document.getElementById("referenceStatus").textContent = state.reference
     ? `${state.reference.name} · ${state.reference.lapTime}`
     : "No reference built";
-  if (document.activeElement !== theoreticalInput) {
-    theoreticalInput.value = state.reference && state.reference.source === "manual-theoretical" ? state.reference.lapTime : "";
-  }
 
   const lamp = document.getElementById("connectionLamp");
   lamp.classList.toggle("connected", packets > 0 && !state.paused);
@@ -105,7 +91,7 @@ function renderSession(state) {
   goalButtons.forEach(button => button.classList.toggle("active", button.dataset.goal === state.drivingGoal));
 }
 
-function renderReviewHero(state, selectedLap) {
+function renderReviewHero(state, selectedLap, insights) {
   const reference = state.reference;
   const referenceLabel = reference ? `${reference.name} ${reference.lapTime}` : "Set target";
   const bestDelta = reference && state.bestLap ? fmtMs(state.bestLap.lapTimeMs - reference.lapTimeMs) : null;
@@ -118,19 +104,46 @@ function renderReviewHero(state, selectedLap) {
     setText("reviewDelta", "--");
     setText("reviewReference", bestDelta ? `${referenceLabel} (${bestDelta} vs PB)` : referenceLabel);
     setText("reviewStatus", "--");
+    renderReviewProfile(null);
     return;
   }
-  const insight = (state.insights || [])[0];
+  const insight = (insights || [])[0];
+  const overviewNotes = selectedLap.overviewNotes || [];
   title.textContent = insight
     ? `Lap ${selectedLap.lapNum}: ${titleCase(insight.category)} at ${insight.area}`
     : `Lap ${selectedLap.lapNum} review`;
   meta.textContent = insight
     ? `${insight.detail} ${insight.recommendation}`
-    : "No major time-loss segment was detected against the current reference.";
+    : overviewNotes.length
+      ? overviewNotes.join(" ")
+      : "No major time-loss segment was detected against the current reference.";
   setText("reviewLapTime", selectedLap.lapTime);
   setText("reviewDelta", fmtMs(selectedLap.deltaToReferenceMs));
   setText("reviewReference", bestDelta ? `${referenceLabel} (${bestDelta} vs PB)` : referenceLabel);
   setText("reviewStatus", lapStatus(selectedLap));
+  renderReviewProfile(selectedLap);
+}
+
+function renderReviewProfile(selectedLap) {
+  const target = document.getElementById("reviewProfile");
+  target.innerHTML = "";
+  const overview = selectedLap && selectedLap.overview || {};
+  if (!overview.sampleCount) return;
+  const metrics = [
+    ["Avg speed", fmtKmh(overview.avgSpeedKmh)],
+    ["Top speed", fmtKmh(overview.topSpeedKmh)],
+    ["Full throttle", fmtPct(overview.fullThrottlePct)],
+    ["Braking", fmtPct(overview.brakingPct)],
+    ["Overlap", fmtPct(overview.brakeThrottleOverlapPct)],
+    ["Control", overview.controlScore === null || overview.controlScore === undefined ? "--" : `${overview.controlScore}/100`],
+  ];
+  for (const [label, value] of metrics) {
+    const pill = document.createElement("div");
+    pill.className = "profilePill";
+    appendText(pill, "span", label);
+    appendText(pill, "strong", value);
+    target.appendChild(pill);
+  }
 }
 
 function renderPacketMix(state) {
@@ -159,6 +172,23 @@ function renderPacketMix(state) {
   }
 }
 
+function renderDiagnostics(items) {
+  const target = document.getElementById("diagnostics");
+  target.innerHTML = "";
+  if (!items.length) {
+    target.appendChild(empty("Runtime checks are clear."));
+    return;
+  }
+  for (const item of items) {
+    const div = document.createElement("div");
+    div.className = `diagnostic ${item.level || "info"}`;
+    appendText(div, "strong", item.title || "Status");
+    appendText(div, "span", item.detail || "");
+    appendText(div, "small", item.action || "");
+    target.appendChild(div);
+  }
+}
+
 function renderInsights(insights) {
   const target = document.getElementById("insights");
   target.innerHTML = "";
@@ -172,12 +202,12 @@ function renderInsights(insights) {
     button.className = `insight ${item.severity}${selectedInsightIndex === index ? " selected" : ""}`;
     button.addEventListener("click", () => {
       selectedInsightIndex = selectedInsightIndex === index ? null : index;
-      refresh().catch(console.error);
+      refreshSafe();
     });
     appendText(button, "strong", `${titleCase(item.category)} · ${fmtMs(item.time_delta_ms)}`);
     appendText(button, "span", item.area || `${Math.round(item.start_pct)}-${Math.round(item.end_pct)}% lap`, "area");
-    appendText(button, "span", item.detail || specificTip(item), "tip");
-    appendText(button, "span", item.recommendation || specificTip(item));
+    appendText(button, "span", item.recommendation || specificTip(item), "tip");
+    appendText(button, "span", item.detail || "", "evidence");
     appendText(button, "span", item.evidence || "", "evidence");
     if (item.reference_source) appendText(button, "span", item.reference_source, "evidence");
     if (item.setup_hint) appendText(button, "span", shortSentence(item.setup_hint), "setup");
@@ -218,14 +248,14 @@ function renderLaps(laps) {
     button.addEventListener("click", () => {
       selectedLapNum = lap.lapNum;
       selectedInsightIndex = null;
-      refresh().catch(console.error);
+      refreshSafe();
     });
     const badge = document.createElement("span");
     badge.className = "lapBadge";
     badge.textContent = lap.lapNum;
     const copy = document.createElement("span");
     appendText(copy, "strong", lap.lapTime);
-    appendText(copy, "small", lapStatus(lap));
+    appendText(copy, "small", lapMeta(lap));
     const ers = document.createElement("span");
     ers.className = "lapErs";
     ers.textContent = fmtErs(lap.ersUsedKj);
@@ -251,7 +281,7 @@ function renderFeed(notices) {
   }
 }
 
-function renderMap(state, selectedLap) {
+function renderMap(state, selectedLap, insights) {
   const ctx = mapCanvas.getContext("2d");
   const w = mapCanvas.width;
   const h = mapCanvas.height;
@@ -271,13 +301,13 @@ function renderMap(state, selectedLap) {
   drawGroupedPath(ctx, ref, bounds, "#2e2738", 11);
   drawGroupedPath(ctx, ref, bounds, "#111016", 7);
   if (selectedSamples.length >= 2 && referenceSamples.length) {
-    drawDeltaPath(ctx, selectedSamples, referenceSamples, bounds, selectedLap.deltaToReferenceMs);
+    drawDeltaPath(ctx, selectedSamples, referenceSamples, bounds);
   } else if (selectedSamples.length >= 2) {
     drawGroupedPath(ctx, selectedSamples, bounds, "#45d6ff", 5);
   } else {
     drawGroupedPath(ctx, ref, bounds, "#ffd166", 5);
   }
-  const selectedInsight = (state.insights || [])[selectedInsightIndex];
+  const selectedInsight = (insights || [])[selectedInsightIndex];
   if (selectedInsight) {
     const segment = ref.filter(s => s.normalizedDistance >= selectedInsight.start_pct / 100 && s.normalizedDistance <= selectedInsight.end_pct / 100);
     drawGroupedPath(ctx, segment, bounds, "#fff7ee", 13);
@@ -285,7 +315,7 @@ function renderMap(state, selectedLap) {
   }
 }
 
-function renderTrace(state, selectedLap) {
+function renderTrace(state, selectedLap, insights) {
   const ctx = traceCanvas.getContext("2d");
   const w = traceCanvas.width;
   const h = traceCanvas.height;
@@ -296,7 +326,7 @@ function renderTrace(state, selectedLap) {
     ? `Lap ${selectedLap.lapNum} speed, throttle, and brake by distance`
     : "Select a completed lap";
   drawTraceGrid(ctx, w, h);
-  const selectedInsight = (state.insights || [])[selectedInsightIndex];
+  const selectedInsight = (insights || [])[selectedInsightIndex];
   if (selectedInsight) shadeTraceSegment(ctx, w, h, selectedInsight.start_pct / 100, selectedInsight.end_pct / 100);
   if (!samples.length) {
     centerText(ctx, w, h, "No input trace available yet");
@@ -366,24 +396,17 @@ function shadeTraceSegment(ctx, w, h, start, end) {
   ctx.fillRect(x, 8, width, h - 34);
 }
 
-function drawDeltaPath(ctx, samples, referenceSamples, bounds, lapDeltaToTargetMs = null) {
+function drawDeltaPath(ctx, samples, referenceSamples, bounds) {
   ctx.lineWidth = 7;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  const slowerThanManualTarget = lapDeltaToTargetMs !== null && lapDeltaToTargetMs > 0;
   for (const group of sampleGroups(samples)) {
     for (let i = 1; i < group.length; i += 1) {
-      const previous = group[i - 1];
       const current = group[i];
-      const refPreviousMs = timeAtDistance(referenceSamples, previous.normalizedDistance);
-      const refCurrentMs = timeAtDistance(referenceSamples, current.normalizedDistance);
-      const lapSegmentMs = current.lapTimeMs - previous.lapTimeMs;
-      let deltaMs = null;
-      if (refPreviousMs !== null && refCurrentMs !== null) {
-        const refSegmentMs = refCurrentMs - refPreviousMs;
-        if (lapSegmentMs > 0 && refSegmentMs > 0) deltaMs = lapSegmentMs - refSegmentMs;
-      }
-      ctx.strokeStyle = deltaMs === null ? "#ffd166" : deltaColor(deltaMs, slowerThanManualTarget);
+      const previous = group[i - 1];
+      const midpoint = (previous.normalizedDistance + current.normalizedDistance) / 2;
+      const deltaMs = localSegmentDelta(samples, referenceSamples, midpoint);
+      ctx.strokeStyle = deltaMs === null ? "#ffd166" : deltaColor(deltaMs);
       const [x1, y1] = project(previous, bounds);
       const [x2, y2] = project(current, bounds);
       ctx.beginPath();
@@ -418,6 +441,11 @@ function selectedLapFromState(state) {
   const selectable = laps.filter(lap => lap.samples && lap.samples.length);
   if (selectedLapNum === null && selectable.length) selectedLapNum = selectable[selectable.length - 1].lapNum;
   return selectable.find(lap => lap.lapNum === selectedLapNum) || selectable[selectable.length - 1] || null;
+}
+
+function selectedLapInsights(state, selectedLap) {
+  if (selectedLap && selectedLap.insights) return selectedLap.insights;
+  return state.insights || [];
 }
 
 function referenceTraceSamples(state) {
@@ -499,9 +527,23 @@ function timeAtDistance(samples, distance) {
   return ordered[ordered.length - 1].lapTimeMs;
 }
 
-function deltaColor(deltaMs, suppressGain = false) {
-  if (!suppressGain && deltaMs <= -25) return "#3ff09a";
-  if (deltaMs >= 120) return "#ff365e";
+function localSegmentDelta(samples, referenceSamples, midpoint) {
+  const segmentCount = 30;
+  const index = Math.max(0, Math.min(segmentCount - 1, Math.floor(midpoint * segmentCount)));
+  const start = index / segmentCount;
+  const end = (index + 1) / segmentCount;
+  const lapStart = timeAtDistance(samples, start);
+  const lapEnd = timeAtDistance(samples, end);
+  if (lapStart === null || lapEnd === null) return null;
+  const targetStart = timeAtDistance(referenceSamples, start);
+  const targetEnd = timeAtDistance(referenceSamples, end);
+  if (targetStart === null || targetEnd === null) return null;
+  return (lapEnd - lapStart) - (targetEnd - targetStart);
+}
+
+function deltaColor(deltaMs) {
+  if (deltaMs < -10) return "#3ff09a";
+  if (deltaMs > 10) return "#ff365e";
   return "#ffd166";
 }
 
@@ -553,22 +595,22 @@ function fmtErs(kj) {
   return `ERS ${Math.round(kj)} kJ`;
 }
 
-function parseLapTimeInput(value) {
-  const text = String(value || "").trim();
-  if (!text) return null;
-  const parts = text.split(":");
-  if (parts.length > 2) return null;
-  let seconds;
-  if (parts.length === 2) {
-    const minutes = Number(parts[0]);
-    const sec = Number(parts[1]);
-    if (!Number.isFinite(minutes) || !Number.isFinite(sec) || minutes < 0 || sec < 0 || sec >= 60) return null;
-    seconds = minutes * 60 + sec;
-  } else {
-    seconds = Number(parts[0]);
-    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+function fmtFuel(lap) {
+  if (lap.fuelKg !== null && lap.fuelKg !== undefined) return `Fuel ${Number(lap.fuelKg).toFixed(1)}kg`;
+  if (lap.fuelRemainingLaps !== null && lap.fuelRemainingLaps !== undefined) {
+    return `Fuel ${Number(lap.fuelRemainingLaps).toFixed(1)} laps`;
   }
-  return Math.round(seconds * 1000);
+  return "";
+}
+
+function fmtKmh(value) {
+  if (value === null || value === undefined) return "--";
+  return `${Math.round(value)} km/h`;
+}
+
+function fmtPct(value) {
+  if (value === null || value === undefined) return "--";
+  return `${Number(value).toFixed(1)}%`;
 }
 
 function titleCase(text) {
@@ -598,6 +640,14 @@ function lapStatus(lap) {
   return "Clean";
 }
 
+function lapMeta(lap) {
+  const parts = [lapStatus(lap)];
+  if (lap.tyreCompound) parts.push(lap.tyreCompound);
+  const fuel = fmtFuel(lap);
+  if (fuel) parts.push(fuel);
+  return parts.join(" · ");
+}
+
 function specificTip(item) {
   const category = item.category || "pace";
   const speedLoss = Math.round(Math.abs(item.speed_delta_kmh || 0));
@@ -611,6 +661,38 @@ function specificTip(item) {
   return "Review this section against the reference trace.";
 }
 
+function showAppError(message) {
+  appError.textContent = message;
+  appError.classList.add("visible");
+}
+
+function clearAppError() {
+  appError.textContent = "";
+  appError.classList.remove("visible");
+}
+
+async function withUiError(work) {
+  try {
+    clearAppError();
+    await work();
+  } catch (error) {
+    showAppError(error && error.message ? error.message : String(error));
+  }
+}
+
+function cleanErrorText(text) {
+  return String(text || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function refreshSafe() {
+  refresh().catch(error => {
+    showAppError(error && error.message ? error.message : String(error));
+  });
+}
+
 initControls();
-setInterval(() => refresh().catch(console.error), 1500);
-refresh().catch(console.error);
+setInterval(refreshSafe, 1500);
+refreshSafe();

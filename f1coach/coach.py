@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from time import monotonic
 from typing import Any
 
@@ -47,6 +47,10 @@ class CompletedLap:
     invalid: bool
     samples: list[LapSample] = field(default_factory=list)
     game_invalid: bool = False
+    fuel_kg: float | None = None
+    fuel_remaining_laps: float | None = None
+    actual_tyre_compound: int | None = None
+    visual_tyre_compound: int | None = None
 
     @property
     def sector3_time_ms(self) -> int:
@@ -150,7 +154,6 @@ class LapCoach:
         self.active_samples: list[LapSample] = []
         self.best_lap: CompletedLap | None = None
         self.clean_laps: list[CompletedLap] = []
-        self.ideal_reference: ReferenceProfile | None = None
         self.external_reference = external_reference
         self.completed_laps: list[CompletedLap] = []
         self.latest_insights: list[SegmentInsight] = []
@@ -188,38 +191,12 @@ class LapCoach:
         self.active_samples = []
         self.best_lap = None
         self.clean_laps = []
-        self.ideal_reference = None
         self.completed_laps = []
         self.latest_insights = []
         self.latest_setup_suggestions = []
         self.last_hint_at = 0.0
         self._begin_corner_metadata_load()
         return [reason]
-
-    def set_manual_theoretical_best(self, lap_time_ms: int | None) -> list[str]:
-        if lap_time_ms is None:
-            self.ideal_reference = None
-            self.latest_insights = []
-            self.latest_setup_suggestions = []
-            return ["Manual theoretical best cleared."]
-        if lap_time_ms <= 0:
-            raise ValueError("Theoretical best must be greater than zero.")
-        self.ideal_reference = ReferenceProfile(
-            name="Theoretical best",
-            source="manual-theoretical",
-            lap_time_ms=lap_time_ms,
-            sector1_time_ms=0,
-            sector2_time_ms=0,
-            samples=[],
-            synthetic=False,
-        )
-        self.latest_insights = self.analyze_lap(self.completed_laps[-1], self._analysis_reference_profile()) if self.completed_laps else []
-        self.latest_setup_suggestions = (
-            self._setup_suggestions(self.completed_laps[-1], self._analysis_reference_profile())
-            if self.completed_laps
-            else []
-        )
-        return [f"Manual theoretical best set to {self._format_ms(lap_time_ms)}."]
 
     def update(self, message: TelemetryMessage) -> list[str]:
         if isinstance(message, SessionInfo):
@@ -324,6 +301,10 @@ class LapCoach:
             invalid=self._active_lap_invalid(),
             samples=self._dedupe_samples(self.active_samples),
             game_invalid=game_invalid,
+            fuel_kg=self.latest_status.fuel_in_tank_kg if self.latest_status is not None else None,
+            fuel_remaining_laps=self.latest_status.fuel_remaining_laps if self.latest_status is not None else None,
+            actual_tyre_compound=self.latest_status.actual_tyre_compound if self.latest_status is not None else None,
+            visual_tyre_compound=self.latest_status.visual_tyre_compound if self.latest_status is not None else None,
         )
 
     def _reset_active_lap_state(self) -> None:
@@ -526,24 +507,26 @@ class LapCoach:
         category = insight.category
         area = insight.area.split(" (", 1)[0]
         if category == "braking":
-            return f"{area}: release brake earlier; {abs(insight.speed_delta_kmh):.0f} km/h down"
+            return f"{area}: {insight.recommendation}"
         if category == "throttle":
-            return f"{area}: pick up throttle earlier after rotation"
+            return f"{area}: {insight.recommendation}"
         if category == "minimum-speed":
-            return f"{area}: carry more apex speed"
+            return f"{area}: {insight.recommendation}"
         if category == "steering":
-            return f"{area}: reduce steering scrub"
+            return f"{area}: {insight.recommendation}"
         if category == "traction":
-            return f"{area}: unwind steering before full throttle"
+            return f"{area}: {insight.recommendation}"
         if category == "ERS deployment":
-            return f"{area}: deploy more on exit"
+            return f"{area}: {insight.recommendation}"
         if category == "ERS waste":
-            return f"{area}: save ERS until traction is available"
-        return f"{area}: review speed trace"
+            return f"{area}: {insight.recommendation}"
+        return f"{area}: {insight.recommendation}"
 
     def analyze_lap(self, lap: CompletedLap, reference: ReferenceProfile | None = None) -> list[SegmentInsight]:
         reference = reference or self.reference_profile()
-        if reference is None or not lap.samples or not reference.samples:
+        if reference is None or not lap.samples:
+            return []
+        if not reference.samples:
             return []
 
         insights: list[SegmentInsight] = []
@@ -576,11 +559,12 @@ class LapCoach:
                 )
             )
 
-        return sorted(insights, key=lambda insight: insight.time_delta_ms, reverse=True)[:2]
+        return sorted(insights, key=lambda insight: insight.time_delta_ms, reverse=True)[:3]
 
     def reference_profile(self) -> ReferenceProfile | None:
-        if self.ideal_reference is not None:
-            return self.ideal_reference
+        sector_theoretical = self._sector_theoretical_reference()
+        if sector_theoretical is not None:
+            return sector_theoretical
         if self.external_reference is not None:
             return self.external_reference
         if self.best_lap is not None:
@@ -593,6 +577,217 @@ class LapCoach:
         if self.best_lap is not None:
             return self._profile_from_lap(self.best_lap, "Personal best", "personal-best")
         return None
+
+    def _sector_theoretical_reference(self) -> ReferenceProfile | None:
+        if not self.clean_laps:
+            return None
+        sector1_lap = min(
+            (lap for lap in self.clean_laps if lap.sector1_time_ms > 0),
+            key=lambda lap: lap.sector1_time_ms,
+            default=None,
+        )
+        sector2_lap = min(
+            (lap for lap in self.clean_laps if lap.sector2_time_ms > 0),
+            key=lambda lap: lap.sector2_time_ms,
+            default=None,
+        )
+        sector3_lap = min(
+            (lap for lap in self.clean_laps if lap.sector3_time_ms > 0),
+            key=lambda lap: lap.sector3_time_ms,
+            default=None,
+        )
+        if sector1_lap is None or sector2_lap is None or sector3_lap is None:
+            return None
+        sector1 = sector1_lap.sector1_time_ms
+        sector2 = sector2_lap.sector2_time_ms
+        sector3 = sector3_lap.sector3_time_ms
+        samples = self._stitch_theoretical_samples(sector1_lap, sector2_lap, sector3_lap)
+        sector_boundaries = self._canonical_sector_boundaries([sector1_lap, sector2_lap, sector3_lap])
+        sector1_end = sector_boundaries[0] * 100 if sector_boundaries is not None else 33.333
+        sector2_end = sector_boundaries[1] * 100 if sector_boundaries is not None else 66.667
+        return ReferenceProfile(
+            name="Theoretical best",
+            source="sector-theoretical",
+            lap_time_ms=sector1 + sector2 + sector3,
+            sector1_time_ms=sector1,
+            sector2_time_ms=sector2,
+            samples=samples,
+            lap_count=len(self.clean_laps),
+            synthetic=True,
+            segments=[
+                TheoreticalSegment(1, 0.0, sector1_end, sector1_lap.lap_num, sector1),
+                TheoreticalSegment(2, sector1_end, sector2_end, sector2_lap.lap_num, sector2),
+                TheoreticalSegment(3, sector2_end, 100.0, sector3_lap.lap_num, sector3),
+            ],
+        )
+
+    def _stitch_theoretical_samples(
+        self,
+        sector1_lap: CompletedLap,
+        sector2_lap: CompletedLap,
+        sector3_lap: CompletedLap,
+    ) -> list[LapSample]:
+        if not sector1_lap.samples or not sector2_lap.samples or not sector3_lap.samples:
+            return []
+        if sector1_lap is sector2_lap and sector2_lap is sector3_lap:
+            return sorted(sector1_lap.samples, key=lambda sample: sample.normalized_distance)
+
+        sector1_boundaries = self._sector_boundary_distances(sector1_lap)
+        sector2_boundaries = self._sector_boundary_distances(sector2_lap)
+        sector3_boundaries = self._sector_boundary_distances(sector3_lap)
+        canonical_boundaries = self._canonical_sector_boundaries([sector1_lap, sector2_lap, sector3_lap])
+        if (
+            sector1_boundaries is None
+            or sector2_boundaries is None
+            or sector3_boundaries is None
+            or canonical_boundaries is None
+        ):
+            return []
+
+        target_sector1_end, target_sector2_end = canonical_boundaries
+
+        stitched: list[LapSample] = []
+        stitched.extend(
+            self._sector_samples_for_reference(
+                sector1_lap,
+                source_start_distance=0.0,
+                source_end_distance=sector1_boundaries[0],
+                target_start_distance=0.0,
+                target_end_distance=target_sector1_end,
+                source_start_time_ms=0,
+                target_offset_ms=0,
+                sector_time_ms=sector1_lap.sector1_time_ms,
+            )
+        )
+        stitched.extend(
+            self._sector_samples_for_reference(
+                sector2_lap,
+                source_start_distance=sector2_boundaries[0],
+                source_end_distance=sector2_boundaries[1],
+                target_start_distance=target_sector1_end,
+                target_end_distance=target_sector2_end,
+                source_start_time_ms=sector2_lap.sector1_time_ms,
+                target_offset_ms=sector1_lap.sector1_time_ms,
+                sector_time_ms=sector2_lap.sector2_time_ms,
+            )
+        )
+        stitched.extend(
+            self._sector_samples_for_reference(
+                sector3_lap,
+                source_start_distance=sector3_boundaries[1],
+                source_end_distance=sector3_boundaries[2],
+                target_start_distance=target_sector2_end,
+                target_end_distance=0.999,
+                source_start_time_ms=sector3_lap.sector1_time_ms + sector3_lap.sector2_time_ms,
+                target_offset_ms=sector1_lap.sector1_time_ms + sector2_lap.sector2_time_ms,
+                sector_time_ms=sector3_lap.sector3_time_ms,
+            )
+        )
+        if not stitched:
+            return []
+
+        by_distance: dict[float, LapSample] = {}
+        for sample in sorted(stitched, key=lambda item: (item.normalized_distance, item.lap_time_ms)):
+            by_distance[round(sample.normalized_distance, 6)] = sample
+        ordered: list[LapSample] = []
+        for sample in sorted(by_distance.values(), key=lambda item: item.normalized_distance):
+            if ordered and sample.lap_time_ms < ordered[-1].lap_time_ms:
+                continue
+            ordered.append(sample)
+        final_time = sector1_lap.sector1_time_ms + sector2_lap.sector2_time_ms + sector3_lap.sector3_time_ms
+        if ordered and ordered[-1].normalized_distance < 0.998:
+            ordered.append(replace(ordered[-1], normalized_distance=0.999, lap_time_ms=final_time))
+        return ordered
+
+    def _sector_samples_for_reference(
+        self,
+        lap: CompletedLap,
+        source_start_distance: float,
+        source_end_distance: float,
+        target_start_distance: float,
+        target_end_distance: float,
+        source_start_time_ms: int,
+        target_offset_ms: int,
+        sector_time_ms: int,
+    ) -> list[LapSample]:
+        source_span = source_end_distance - source_start_distance
+        target_span = target_end_distance - target_start_distance
+        if source_span <= 0 or target_span <= 0:
+            return []
+
+        result: list[LapSample] = []
+        start_sample = self._nearest_sample(lap.samples, source_start_distance)
+        end_sample = self._nearest_sample(lap.samples, source_end_distance)
+        if start_sample is not None:
+            result.append(
+                replace(
+                    start_sample,
+                    lap_time_ms=target_offset_ms,
+                    lap_distance_m=self._lap_distance_for(target_start_distance, start_sample),
+                    normalized_distance=target_start_distance,
+                )
+            )
+        for sample in sorted(lap.samples, key=lambda item: item.normalized_distance):
+            if source_start_distance < sample.normalized_distance < source_end_distance:
+                ratio = (sample.normalized_distance - source_start_distance) / source_span
+                target_distance = target_start_distance + ratio * target_span
+                adjusted_time = max(0, target_offset_ms + sample.lap_time_ms - source_start_time_ms)
+                result.append(
+                    replace(
+                        sample,
+                        lap_time_ms=adjusted_time,
+                        lap_distance_m=self._lap_distance_for(target_distance, sample),
+                        normalized_distance=max(0.0, min(0.999, target_distance)),
+                    )
+                )
+        if end_sample is not None:
+            result.append(
+                replace(
+                    end_sample,
+                    lap_time_ms=target_offset_ms + sector_time_ms,
+                    lap_distance_m=self._lap_distance_for(target_end_distance, end_sample),
+                    normalized_distance=target_end_distance,
+                )
+            )
+        return result
+
+    def _sector_boundary_distances(self, lap: CompletedLap) -> tuple[float, float, float] | None:
+        if not lap.samples:
+            return None
+        sector1_end = self._distance_at_lap_time(lap.samples, lap.sector1_time_ms)
+        sector2_end = self._distance_at_lap_time(lap.samples, lap.sector1_time_ms + lap.sector2_time_ms)
+        if sector1_end is None or sector2_end is None:
+            return None
+        lap_end = max(sample.normalized_distance for sample in lap.samples)
+        if sector2_end <= sector1_end or lap_end <= sector2_end:
+            return None
+        return (
+            max(0.0, min(0.999, sector1_end)),
+            max(0.0, min(0.999, sector2_end)),
+            max(0.0, min(0.999, lap_end)),
+        )
+
+    def _canonical_sector_boundaries(self, laps: list[CompletedLap]) -> tuple[float, float] | None:
+        boundaries = [self._sector_boundary_distances(lap) for lap in laps]
+        if any(boundary is None for boundary in boundaries):
+            return None
+        resolved = [boundary for boundary in boundaries if boundary is not None]
+        sector1_end = self._median(boundary[0] for boundary in resolved)
+        sector2_end = self._median(boundary[1] for boundary in resolved)
+        if sector1_end <= 0 or sector2_end <= sector1_end or sector2_end >= 0.999:
+            return None
+        return sector1_end, sector2_end
+
+    @staticmethod
+    def _nearest_sample(samples: list[LapSample], normalized_distance: float) -> LapSample | None:
+        if not samples:
+            return None
+        return min(samples, key=lambda sample: abs(sample.normalized_distance - normalized_distance))
+
+    def _lap_distance_for(self, normalized_distance: float, fallback: LapSample) -> float:
+        if self.track_length_m is not None:
+            return normalized_distance * self.track_length_m
+        return fallback.lap_distance_m
 
     def _classify_segment(
         self,
@@ -729,10 +924,20 @@ class LapCoach:
         else:
             category = "pace"
             detail = f"{area}: lost {delta_ms / 1000:.2f}s, average speed {speed_loss:.0f} km/h below reference."
-            recommendation = "Compare the speed trace shape here first; the loss is broad rather than one clear input mistake."
+            recommendation = "Clean up this section before setup changes."
             setup_hint = None
 
-        recommendation = self._with_dynamic_advice(recommendation, category, context)
+        recommendation = self._concise_recommendation(
+            category,
+            context,
+            avg_speed_delta,
+            brake_delta,
+            throttle_delta,
+            min_speed_delta,
+            steer_delta,
+            ers_delta_kj,
+            avg_slip,
+        )
         dynamic_setup_hint = self._dynamic_setup_hint(category, context)
         if setup_hint is None:
             setup_hint = dynamic_setup_hint
@@ -753,6 +958,73 @@ class LapCoach:
             setup_hint=setup_hint,
             reference_source=reference_source,
         )
+
+    def _concise_recommendation(
+        self,
+        category: str,
+        context: DynamicSegmentContext,
+        avg_speed_delta: float,
+        brake_delta: float,
+        throttle_delta: float,
+        min_speed_delta: float,
+        steer_delta: float,
+        ers_delta_kj: float | None,
+        avg_slip: float,
+    ) -> str:
+        target = self._tip_target(context)
+        speed_loss = abs(avg_speed_delta)
+        min_loss = abs(min_speed_delta)
+
+        if category == "braking":
+            if context.phase == "entry":
+                return f"Brake 5-10 m earlier into {target}, then release sooner for exit."
+            return f"Shorten the brake release at {target}; you are {speed_loss:.0f} km/h down."
+        if category == "under-braking":
+            return f"Brake earlier into {target}; the late slowdown is killing minimum speed."
+        if category == "throttle":
+            return f"Rotate earlier at {target} so throttle starts sooner on exit."
+        if category == "minimum-speed":
+            return f"Release brake earlier into {target}; protect {min_loss:.0f} km/h more apex speed."
+        if category == "steering":
+            if steer_delta > 0.22:
+                return f"Use one calmer steering input at {target}; extra lock is scrubbing speed."
+            return f"Open the wheel earlier at {target} before asking for throttle."
+        if category == "traction":
+            if avg_slip > 0.32:
+                return f"Short-shift at {target} and wait for steering unwind before full throttle."
+            return f"Delay full throttle at {target} until the wheel is opening."
+        if category == "ERS deployment":
+            straight = self._ers_target(context)
+            used = f" {abs(ers_delta_kj):.0f} kJ" if ers_delta_kj is not None else ""
+            return f"Use more ERS on {straight}; you left{used} on the table here."
+        if category == "ERS waste":
+            return f"Save ERS through {target}; spend it after the next clean exit."
+
+        if context.phase == "entry":
+            return f"Brake earlier and cleaner into {target}; the loss starts before apex."
+        if context.phase == "exit":
+            return f"Prioritize exit at {target}; open steering before chasing throttle."
+        if context.phase == "mid-corner":
+            return f"Reduce mid-corner scrub at {target}; enter calmer and use less extra lock."
+        if context.phase == "straight":
+            return f"Use full throttle and ERS earlier on {target}; this is straight-line loss."
+        return f"Clean up {target}; the loss is spread across brake, throttle, and speed."
+
+    @staticmethod
+    def _tip_target(context: DynamicSegmentContext) -> str:
+        label = context.label.split(" (", 1)[0]
+        for suffix in (" entry", " exit", " mid-corner", " transition"):
+            if label.endswith(suffix):
+                return label[: -len(suffix)]
+        return label
+
+    def _ers_target(self, context: DynamicSegmentContext) -> str:
+        target = self._tip_target(context)
+        if target.startswith("Straight after "):
+            return target[0].lower() + target[1:]
+        if context.straight_after:
+            return f"the straight after {target}"
+        return target
 
     def _reference_sample(self, samples: list[LapSample], normalized_distance: float) -> LapSample | None:
         ref_by_bucket = self._bucket_samples(samples)
@@ -787,6 +1059,21 @@ class LapCoach:
                 ratio = (normalized_distance - previous.normalized_distance) / span
                 return int(previous.lap_time_ms + ratio * (current.lap_time_ms - previous.lap_time_ms))
         return ordered[-1].lap_time_ms
+
+    def _distance_at_lap_time(self, samples: list[LapSample], lap_time_ms: int) -> float | None:
+        if not samples:
+            return None
+        ordered = sorted(samples, key=lambda sample: sample.lap_time_ms)
+        if lap_time_ms <= ordered[0].lap_time_ms:
+            return ordered[0].normalized_distance
+        for previous, current in zip(ordered, ordered[1:]):
+            if previous.lap_time_ms <= lap_time_ms <= current.lap_time_ms:
+                span = current.lap_time_ms - previous.lap_time_ms
+                if span <= 0:
+                    return current.normalized_distance
+                ratio = (lap_time_ms - previous.lap_time_ms) / span
+                return previous.normalized_distance + ratio * (current.normalized_distance - previous.normalized_distance)
+        return ordered[-1].normalized_distance
 
     def _samples_between(self, samples: list[LapSample], start: float, end: float) -> list[LapSample]:
         return [sample for sample in samples if start <= sample.normalized_distance <= end]
@@ -904,6 +1191,7 @@ class LapCoach:
 
     def snapshot(self) -> dict[str, Any]:
         reference = self.reference_profile()
+        analysis_reference = self._analysis_reference_profile()
         current_sample = self._live_sample() or (self.active_samples[-1] if self.active_samples else None)
         current_samples = self._dedupe_samples(self._current_samples_with_live(current_sample))
         best_lap = self.best_lap
@@ -929,10 +1217,16 @@ class LapCoach:
                 "source": map_source,
                 "samples": [self._sample_to_dict(sample) for sample in map_samples[-900:]],
             },
-            "bestLap": self._lap_summary(best_lap, reference) if best_lap else None,
+            "bestLap": self._lap_summary(best_lap, reference, analysis_reference=analysis_reference) if best_lap else None,
             "reference": self._reference_to_dict(reference) if reference else None,
             "completedLaps": [
-                self._lap_summary(lap, reference, include_samples=True) for lap in self.completed_laps[-20:]
+                self._lap_summary(
+                    lap,
+                    reference,
+                    include_samples=True,
+                    analysis_reference=analysis_reference,
+                )
+                for lap in self.completed_laps[-20:]
             ],
             "insights": [asdict(insight) for insight in self.latest_insights],
             "setupInsights": self.latest_setup_suggestions,
@@ -962,7 +1256,12 @@ class LapCoach:
         lap: CompletedLap,
         reference: ReferenceProfile | None = None,
         include_samples: bool = False,
+        analysis_reference: ReferenceProfile | None = None,
     ) -> dict[str, Any]:
+        if reference is not None and reference.source == "sector-theoretical":
+            insight_reference = reference
+        else:
+            insight_reference = analysis_reference or (reference if reference is not None and reference.samples else None)
         summary: dict[str, Any] = {
             "lapNum": lap.lap_num,
             "lapTimeMs": lap.lap_time_ms,
@@ -972,8 +1271,16 @@ class LapCoach:
             "sector3Ms": lap.sector3_time_ms,
             "deltaToReferenceMs": self._lap_reference_delta(lap, reference),
             "ersUsedKj": self._lap_ers_used_kj(lap),
+            "fuelKg": round(lap.fuel_kg, 2) if lap.fuel_kg is not None else None,
+            "fuelRemainingLaps": round(lap.fuel_remaining_laps, 2) if lap.fuel_remaining_laps is not None else None,
+            "actualTyreCompound": lap.actual_tyre_compound,
+            "visualTyreCompound": lap.visual_tyre_compound,
+            "tyreCompound": self._tyre_label(lap.visual_tyre_compound, lap.actual_tyre_compound),
+            "overview": self._lap_overview(lap),
+            "overviewNotes": self._lap_overview_notes(lap),
             "invalid": lap.invalid,
             "gameInvalid": lap.game_invalid,
+            "insights": [asdict(insight) for insight in self.analyze_lap(lap, insight_reference)],
         }
         if include_samples:
             summary["samples"] = [self._sample_to_dict(sample) for sample in lap.samples[-700:]]
@@ -995,6 +1302,108 @@ class LapCoach:
         if not deployed:
             return None
         return max(deployed) / 1000
+
+    @staticmethod
+    def _tyre_label(visual_compound: int | None, actual_compound: int | None) -> str | None:
+        visual_labels = {
+            7: "Inter",
+            8: "Wet",
+            16: "Soft",
+            17: "Medium",
+            18: "Hard",
+        }
+        actual_labels = {
+            7: "Inter",
+            8: "Wet",
+            16: "C5",
+            17: "C4",
+            18: "C3",
+            19: "C2",
+            20: "C1",
+            21: "C0",
+        }
+        if visual_compound in visual_labels:
+            return visual_labels[visual_compound]
+        if actual_compound in actual_labels:
+            return actual_labels[actual_compound]
+        if visual_compound is not None:
+            return f"Tyre {visual_compound}"
+        if actual_compound is not None:
+            return f"Tyre {actual_compound}"
+        return None
+
+    def _lap_overview(self, lap: CompletedLap) -> dict[str, Any]:
+        samples = sorted(lap.samples, key=lambda sample: sample.normalized_distance)
+        if not samples:
+            return {}
+        slip_values = [sample.avg_slip_ratio for sample in samples if sample.avg_slip_ratio is not None]
+        avg_slip = self._avg(slip_values) if slip_values else None
+        overlap_pct = self._sample_pct(samples, lambda sample: sample.brake > 0.05 and sample.throttle > 0.05)
+        steering_throttle_pct = self._sample_pct(
+            samples,
+            lambda sample: sample.throttle > 0.70 and abs(sample.steer) > 0.22,
+        )
+        high_slip_pct = self._sample_pct(
+            samples,
+            lambda sample: sample.avg_slip_ratio is not None
+            and sample.avg_slip_ratio > 0.28
+            and sample.throttle > 0.55,
+        )
+        control_score = 100.0
+        control_score -= overlap_pct * 1.0
+        control_score -= max(0.0, steering_throttle_pct - 8.0) * 0.7
+        control_score -= high_slip_pct * 0.9
+        if avg_slip is not None and avg_slip > 0.22:
+            control_score -= (avg_slip - 0.22) * 80
+
+        return {
+            "sampleCount": len(samples),
+            "avgSpeedKmh": round(self._avg(sample.speed_kmh for sample in samples), 1),
+            "topSpeedKmh": max(sample.speed_kmh for sample in samples),
+            "fullThrottlePct": self._sample_pct(samples, lambda sample: sample.throttle >= 0.95),
+            "brakingPct": self._sample_pct(samples, lambda sample: sample.brake >= 0.10),
+            "coastPct": self._sample_pct(samples, lambda sample: sample.throttle < 0.05 and sample.brake < 0.05),
+            "brakeThrottleOverlapPct": overlap_pct,
+            "steeringThrottlePct": steering_throttle_pct,
+            "highSlipPct": high_slip_pct if slip_values else None,
+            "avgSlipRatio": round(avg_slip, 3) if avg_slip is not None else None,
+            "controlScore": round(max(0.0, min(100.0, control_score))),
+        }
+
+    def _lap_overview_notes(self, lap: CompletedLap) -> list[str]:
+        overview = self._lap_overview(lap)
+        if not overview:
+            return []
+
+        notes: list[str] = []
+        overlap = float(overview.get("brakeThrottleOverlapPct") or 0.0)
+        steering_throttle = float(overview.get("steeringThrottlePct") or 0.0)
+        high_slip = overview.get("highSlipPct")
+        coast = float(overview.get("coastPct") or 0.0)
+        full_throttle = float(overview.get("fullThrottlePct") or 0.0)
+
+        if overlap >= 6.0:
+            notes.append(f"Brake/throttle overlap is {overlap:.1f}% of samples; separate the pedals in braking zones.")
+        if steering_throttle >= 12.0:
+            notes.append(
+                f"High throttle with steering lock appears in {steering_throttle:.1f}% of samples; unwind earlier on exits."
+            )
+        if high_slip is not None and float(high_slip) >= 8.0:
+            notes.append(f"Driven-wheel slip is elevated on {float(high_slip):.1f}% of traction samples.")
+        if coast >= 18.0:
+            notes.append(f"Coasting is {coast:.1f}% of samples; check whether entries need a cleaner brake release.")
+        if full_throttle >= 58.0 and overlap < 4.0 and (high_slip is None or float(high_slip) < 5.0):
+            notes.append("Lap profile looks committed: high full-throttle time with low overlap and stable traction.")
+        if not notes:
+            notes.append("Lap profile is balanced; use the trace to hunt for smaller timing differences.")
+        return notes[:3]
+
+    @staticmethod
+    def _sample_pct(samples: list[LapSample], predicate: Any) -> float:
+        if not samples:
+            return 0.0
+        matches = sum(1 for sample in samples if predicate(sample))
+        return round(matches / len(samples) * 100, 1)
 
     def _live_sample(self) -> LapSample | None:
         if self.latest_lap is None or self.latest_telemetry is None:
@@ -1089,6 +1498,16 @@ class LapCoach:
         collected = list(values)
         return sum(collected) / len(collected) if collected else 0.0
 
+    @staticmethod
+    def _median(values: Any) -> float:
+        collected = sorted(values)
+        if not collected:
+            return 0.0
+        midpoint = len(collected) // 2
+        if len(collected) % 2:
+            return collected[midpoint]
+        return (collected[midpoint - 1] + collected[midpoint]) / 2
+
     def _area_name(self, normalized_distance: float) -> str:
         reference = self.reference_profile()
         official_label = self._official_corner_label(normalized_distance)
@@ -1168,59 +1587,6 @@ class LapCoach:
             ers_used_kj=ers_used_kj,
             straight_after=straight_after,
         )
-
-    def _with_dynamic_advice(self, recommendation: str, category: str, context: DynamicSegmentContext) -> str:
-        cues: list[str] = []
-        downhill = context.elevation_change_m is not None and context.elevation_change_m < -0.5
-        uphill = context.elevation_change_m is not None and context.elevation_change_m > 0.5
-        low_grip = context.avg_slip_ratio is not None and context.avg_slip_ratio > 0.24
-
-        if category in {"braking", "under-braking"}:
-            if downhill:
-                cues.append("brake a touch earlier for the downhill load change, then release more gently in the final phase")
-            elif uphill:
-                cues.append("use the uphill braking grip for a firm initial hit, but still finish the release before peak steering")
-            elif context.avg_steer > 0.22:
-                cues.append("separate the peak brake pressure from the first big steering input")
-            else:
-                cues.append("keep the peak brake hit straight, then shorten the trail-brake phase")
-            if self.driving_goal == "qualifying":
-                cues.append("once the car rotates cleanly, try carrying a little more entry speed instead of simply braking later")
-            else:
-                cues.append("for race pace, bias this toward no lockups and a repeatable release point")
-        elif category == "minimum-speed":
-            cues.append("try carrying more speed through the slowest point, but only if the exit throttle trace stays clean")
-            if context.phase == "entry":
-                cues.append("release the final brake pressure earlier so the car rolls to apex instead of stopping at it")
-        elif category == "steering":
-            cues.append("take a straighter line out with smoother steering unwind; avoid adding lock after the apex")
-            if context.avg_speed_kmh > 180:
-                cues.append("at this speed, one small correction costs more than a slightly calmer entry")
-        elif category in {"throttle", "traction"}:
-            if low_grip:
-                cues.append("treat the first throttle ramp as grip-limited: squeeze it against steering unwind and consider a short shift")
-            else:
-                cues.append("open the steering earlier so throttle can build without asking the rear tyre for rotation and drive at the same time")
-            if context.straight_after:
-                cues.append("prioritize the exit because it feeds a full-throttle section")
-        elif category == "ERS deployment":
-            if context.straight_after:
-                cues.append("deploy more battery as soon as the wheel is opening on exit; this is a better spend zone than the braking phase")
-            else:
-                cues.append("delay deployment until the car is straighter so the battery goes into acceleration instead of wheelspin")
-        elif category == "ERS waste":
-            cues.append("save that battery through the brake/partial-throttle part and spend it after rotation on the next clean exit")
-        else:
-            if context.phase == "entry":
-                cues.append("compare whether the loss starts from brake release or entry speed before changing setup")
-            elif context.phase == "exit":
-                cues.append("look for a straighter exit line and earlier steering unwind before chasing more throttle")
-            else:
-                cues.append("use the trace shape to decide whether this is entry speed, mid-corner scrub, or exit commitment")
-
-        if not cues:
-            return recommendation
-        return f"{recommendation} Try this: {'; '.join(cues[:3])}."
 
     def _live_dynamic_hint(self, sample: LapSample, hint: str) -> str | None:
         reference = self.reference_profile()

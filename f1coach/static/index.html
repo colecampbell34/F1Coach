@@ -21,12 +21,6 @@
       </div>
 
       <div class="heroControls">
-        <form id="theoreticalForm" class="theoreticalForm">
-          <label for="theoreticalInput">Theoretical best</label>
-          <input id="theoreticalInput" type="text" inputmode="decimal" autocomplete="off" placeholder="1:23.456">
-          <button type="submit">Set</button>
-          <button id="clearTheoreticalButton" type="button">Clear</button>
-        </form>
         <div class="goalToggle" role="group" aria-label="Coaching goal">
           <button data-goal="qualifying" type="button">Quali</button>
           <button data-goal="race" type="button">Race</button>
@@ -34,6 +28,7 @@
         <button id="pauseButton" type="button">Pause Capture</button>
         <button id="newSessionButton" type="button">New Session</button>
       </div>
+      <div id="appError" class="appError" role="status" aria-live="polite"></div>
     </header>
 
     <main class="reviewGrid">
@@ -61,6 +56,7 @@
             <strong id="reviewStatus">--</strong>
           </div>
         </div>
+        <div id="reviewProfile" class="reviewProfile"></div>
       </section>
 
       <section class="lapShelf panel">
@@ -149,6 +145,7 @@
           <span id="referenceStatus">No reference built</span>
         </div>
         <div id="packetMix" class="packetMix"></div>
+        <div id="diagnostics" class="diagnostics"></div>
       </section>
     </main>
   </div>

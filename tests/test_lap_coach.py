@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from f1coach.coach import CompletedLap, LapCoach, LapSample, ReferenceProfile
-from f1coach.models import CarTelemetrySnapshot, LapSnapshot, PacketHeader, SessionInfo
+from f1coach.models import CarStatusSnapshot, CarTelemetrySnapshot, LapSnapshot, PacketHeader, SessionInfo
 
 
 class FakeCornerMetadata:
@@ -141,13 +141,37 @@ class LapCoachTests(unittest.TestCase):
         )
         coach.completed_laps = [lap]
         coach.best_lap = lap
-        coach.set_manual_theoretical_best(90_000)
+        coach.clean_laps = [CompletedLap(2, 90_000, 29_000, 31_000, False, [])]
 
         summary = coach.snapshot()["completedLaps"][0]
 
         self.assertEqual(summary["deltaToReferenceMs"], 1_500)
         self.assertEqual(summary["ersUsedKj"], 185)
         self.assertEqual(len(summary["samples"]), 2)
+        self.assertEqual(summary["overview"]["topSpeedKmh"], 220)
+        self.assertEqual(summary["overview"]["sampleCount"], 2)
+
+    def test_lap_overview_flags_input_overlap(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        lap = CompletedLap(
+            8,
+            91_500,
+            30_000,
+            31_000,
+            False,
+            [
+                self._sample(10_000, 0.10, 180, 0.40, 0.25),
+                self._sample(20_000, 0.30, 220, 0.90, 0.00),
+                self._sample(30_000, 0.50, 160, 0.20, 0.35),
+                self._sample(40_000, 0.70, 250, 1.00, 0.00),
+            ],
+        )
+
+        summary = coach._lap_summary(lap)
+
+        self.assertEqual(summary["overview"]["brakeThrottleOverlapPct"], 50.0)
+        self.assertLess(summary["overview"]["controlScore"], 70)
+        self.assertTrue(any("overlap" in note for note in summary["overviewNotes"]))
 
     def test_uses_active_lap_sector_times_when_lap_rolls_over(self) -> None:
         coach = LapCoach(sample_buckets=10)
@@ -188,34 +212,93 @@ class LapCoachTests(unittest.TestCase):
         self.assertIsNone(coach.reference_profile())
         self.assertEqual(coach.completed_laps, [])
 
-    def test_manual_theoretical_best_sets_time_only_reference(self) -> None:
-        coach = LapCoach(sample_buckets=60)
-
-        notices = coach.set_manual_theoretical_best(87_654)
-
-        reference = coach.reference_profile()
-        self.assertIsNotNone(reference)
-        assert reference is not None
-        self.assertEqual(reference.name, "Theoretical best")
-        self.assertEqual(reference.source, "manual-theoretical")
-        self.assertEqual(reference.lap_time_ms, 87_654)
-        self.assertEqual(reference.samples, [])
-        self.assertIn("Manual theoretical best set", notices[0])
-
-    def test_completed_laps_do_not_auto_calculate_theoretical_best(self) -> None:
+    def test_completed_laps_calculate_theoretical_best_from_best_sectors(self) -> None:
         coach = LapCoach(sample_buckets=30)
-        lap_a = self._completed_lap(1, 90_000, slow_second_half=True)
-        lap_b = self._completed_lap(2, 89_000, slow_second_half=False)
-        coach.clean_laps = [lap_a]
-        coach.best_lap = lap_a
-
-        coach._summarize_completed_lap(lap_b)
+        lap_a = CompletedLap(1, 90_000, 30_000, 31_000, False, [])
+        lap_b = CompletedLap(2, 89_000, 29_000, 30_000, False, [])
+        coach.clean_laps = [lap_a, lap_b]
+        coach.best_lap = lap_b
 
         reference = coach.reference_profile()
+
         self.assertIsNotNone(reference)
         assert reference is not None
-        self.assertEqual(reference.source, "personal-best")
-        self.assertEqual(reference.lap_time_ms, 89_000)
+        self.assertEqual(reference.source, "sector-theoretical")
+        self.assertEqual(reference.lap_time_ms, 88_000)
+        self.assertEqual(reference.sector1_time_ms, 29_000)
+        self.assertEqual(reference.sector2_time_ms, 30_000)
+        self.assertEqual(reference.sector3_time_ms, 29_000)
+
+    def test_sector_theoretical_insights_use_same_time_target_as_map(self) -> None:
+        coach = LapCoach(sample_buckets=30)
+        lap = CompletedLap(
+            3,
+            96_000,
+            30_000,
+            36_000,
+            False,
+            self._piecewise_samples([30_000, 36_000, 30_000]),
+        )
+        coach.completed_laps = [lap]
+        coach.best_lap = lap
+        coach.clean_laps = [
+            lap,
+            CompletedLap(2, 90_000, 30_000, 30_000, False, self._piecewise_samples([30_000, 30_000, 30_000])),
+        ]
+
+        summary = coach.snapshot()["completedLaps"][0]
+
+        self.assertEqual(summary["deltaToReferenceMs"], 6_000)
+        self.assertTrue(summary["insights"])
+        self.assertTrue(
+            all(insight["reference_source"] == "reference segment from lap 2" for insight in summary["insights"])
+        )
+        self.assertFalse(
+            any("theoretical sector pace" in insight["detail"] for insight in summary["insights"])
+        )
+        self.assertTrue(any(33 <= insight["start_pct"] <= 67 for insight in summary["insights"]))
+
+    def test_sector_theoretical_lap_with_all_best_sectors_compares_to_itself(self) -> None:
+        coach = LapCoach(sample_buckets=30)
+        lap = CompletedLap(
+            2,
+            90_000,
+            30_000,
+            30_000,
+            False,
+            self._piecewise_samples([30_000, 30_000, 30_000]),
+        )
+        coach.completed_laps = [lap]
+        coach.best_lap = lap
+        coach.clean_laps = [lap]
+
+        reference = coach.reference_profile()
+        summary = coach.snapshot()["completedLaps"][0]
+
+        self.assertIsNotNone(reference)
+        assert reference is not None
+        self.assertEqual(reference.source, "sector-theoretical")
+        self.assertEqual(reference.lap_time_ms, lap.lap_time_ms)
+        self.assertEqual(summary["deltaToReferenceMs"], 0)
+        self.assertEqual(summary["insights"], [])
+
+    def test_completed_lap_records_fuel_and_tyre_status(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.update(SessionInfo(self.header, 5000, 0, 10, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
+        coach.update(self._status(fuel_kg=13.4, fuel_laps=5.6, visual_tyre=16, actual_tyre=18))
+        coach.update(self._lap(lap_num=1, current_ms=10_000, last_ms=0, distance=1000))
+        coach.update(self._lap(lap_num=2, current_ms=100, last_ms=90_000, distance=10))
+
+        self.assertIsNotNone(coach.best_lap)
+        assert coach.best_lap is not None
+        self.assertEqual(coach.best_lap.fuel_kg, 13.4)
+        self.assertEqual(coach.best_lap.fuel_remaining_laps, 5.6)
+        self.assertEqual(coach.best_lap.visual_tyre_compound, 16)
+        summary = coach.snapshot()["completedLaps"][0]
+        self.assertEqual(summary["fuelKg"], 13.4)
+        self.assertEqual(summary["fuelRemainingLaps"], 5.6)
+        self.assertEqual(summary["tyreCompound"], "Soft")
 
     def test_identifies_ers_underuse_on_corner_exit(self) -> None:
         coach = LapCoach(sample_buckets=30)
@@ -276,7 +359,28 @@ class LapCoachTests(unittest.TestCase):
 
         self.assertTrue(any("Corner 1" in insight.area for insight in insights))
         self.assertFalse(any("Bahrain" in insight.area for insight in insights))
-        self.assertTrue(any("carrying a little more entry speed" in insight.recommendation for insight in insights))
+        self.assertTrue(any("Brake 5-10 m earlier into Corner 1" in insight.recommendation for insight in insights))
+
+    def test_snapshot_includes_lap_specific_insights(self) -> None:
+        coach = LapCoach(sample_buckets=30)
+        lap_samples = [
+            self._sample(10_000, 0.30, 180, 0.05, 0.72),
+            self._sample(11_050, 0.32, 95, 0.10, 0.58),
+        ]
+        ref_samples = [
+            self._sample(10_000, 0.30, 190, 0.05, 0.52),
+            self._sample(10_550, 0.32, 112, 0.12, 0.35),
+        ]
+        lap = CompletedLap(6, 80_000, 25_000, 27_000, False, lap_samples)
+        coach.completed_laps = [lap]
+        coach.external_reference = ReferenceProfile("Imported", "test", 79_000, 24_500, 26_800, ref_samples)
+
+        state = coach.snapshot()
+
+        insights = state["completedLaps"][0]["insights"]
+        self.assertTrue(insights)
+        self.assertIn("Corner 1", insights[0]["area"])
+        self.assertNotIn("Compare the speed trace", insights[0]["recommendation"])
 
     def test_fastf1_metadata_can_enrich_dynamic_corner_labels(self) -> None:
         metadata = FakeCornerMetadata()
@@ -315,7 +419,7 @@ class LapCoachTests(unittest.TestCase):
 
         self.assertTrue(any("Corner 1" in insight.area for insight in insights))
         self.assertFalse(any("Austria" in insight.area for insight in insights))
-        self.assertTrue(any("race pace" in insight.recommendation for insight in insights))
+        self.assertTrue(any("Brake earlier and cleaner into Corner 1" in insight.recommendation for insight in insights))
 
     def _telemetry(self, speed: int, throttle: float, brake: float) -> CarTelemetrySnapshot:
         return CarTelemetrySnapshot(
@@ -336,6 +440,33 @@ class LapCoachTests(unittest.TestCase):
             engine_temperature_c=105,
             tyre_pressures_psi=(23.1, 23.1, 23.1, 23.1),
             surface_types=(0, 0, 0, 0),
+        )
+
+    def _status(
+        self,
+        fuel_kg: float,
+        fuel_laps: float,
+        visual_tyre: int,
+        actual_tyre: int,
+    ) -> CarStatusSnapshot:
+        return CarStatusSnapshot(
+            header=self.header,
+            car_index=0,
+            fuel_in_tank_kg=fuel_kg,
+            fuel_capacity_kg=110.0,
+            fuel_remaining_laps=fuel_laps,
+            max_rpm=13_000,
+            idle_rpm=4_000,
+            max_gears=8,
+            drs_allowed=True,
+            actual_tyre_compound=actual_tyre,
+            visual_tyre_compound=visual_tyre,
+            tyres_age_laps=2,
+            vehicle_fia_flags=0,
+            ers_store_energy_j=3_000_000,
+            ers_deploy_mode=2,
+            ers_deployed_this_lap_j=50_000,
+            network_paused=False,
         )
 
     def _lap(

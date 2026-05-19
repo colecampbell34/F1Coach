@@ -9,7 +9,7 @@ F1Coach is a small Python app that listens to live UDP telemetry from F1 24 and 
 - Runs a local review dashboard focused on completed laps, delta maps, input traces, priority fixes, and packet status.
 - Plots a 2D track map from live motion packet world positions.
 - Highlights areas of the track where the last lap lost time.
-- Lets you enter the game's `Theoretical best` time and compares completed laps against that manual target.
+- Calculates a simple theoretical best from your three best clean sectors.
 - Supports imported reference lap JSON when you can get telemetry from another driver or tool.
 - Prints completed-lap summaries with sector deltas and likely time-loss areas.
 
@@ -95,11 +95,11 @@ python3 -m f1coach listen --port 20777 --show-packets
 
 F1Coach uses the best available reference in this order:
 
-1. Manual `Theoretical best` entered in the dashboard.
+1. Your current-session theoretical best: best sector 1 + best sector 2 + best sector 3 from clean laps.
 2. Imported reference lap JSON passed with `--reference`.
 3. Your personal best lap from the current session.
 
-The dashboard does not calculate a theoretical best from your laps. Enter the theoretical best shown by the game, such as `1:23.456` or `83.456`, and F1Coach uses that as the lap-time target. Because a typed theoretical best has no speed, input, ERS, or position trace, corner-level tips and the delta map still compare your selected lap against your personal-best trace.
+The dashboard calculates theoretical best with a simple sector sum from your clean completed laps. Because this target has no speed, input, ERS, or position trace, corner-level tips still compare your selected lap against your personal-best trace or an imported reference.
 
 External laps are useful, but assists matter. A no-assist wheel lap is often a poor direct target for a controller lap with medium traction control. If you import another driver's reference, include an `assistProfile` in the JSON so the dashboard can make the source clear.
 

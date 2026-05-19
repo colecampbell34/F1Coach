@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import socket
 import sys
 import threading
 import webbrowser
 from typing import Sequence
 
-from f1coach.dashboard import TelemetryRuntime, run_udp_listener, serve_dashboard
+from f1coach.dashboard import TelemetryRuntime, open_udp_socket, run_udp_listener, serve_dashboard
 from f1coach.references import load_reference
 
 
@@ -64,22 +65,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("Start driving in F1 24. Clean laps build a personal ideal-lap reference.")
         try:
             run_udp_listener(runtime, args.bind, args.port, show_packets=args.show_packets)
+        except OSError as exc:
+            _print_socket_error("UDP listener", args.bind, args.port, exc)
+            return 2
         except KeyboardInterrupt:
             print("\nStopped.")
         return 0
 
+    try:
+        udp_sock = open_udp_socket(args.bind, args.port)
+    except OSError as exc:
+        _print_socket_error("UDP listener", args.bind, args.port, exc)
+        return 2
+
+    try:
+        server = serve_dashboard(runtime, args.http_host, args.http_port)
+    except OSError as exc:
+        udp_sock.close()
+        _print_socket_error("dashboard", args.http_host, args.http_port, exc)
+        return 2
+
     stop_event = threading.Event()
     udp_thread = threading.Thread(
         target=run_udp_listener,
-        args=(runtime, args.bind, args.port, args.show_packets, stop_event),
+        args=(runtime, args.bind, args.port, args.show_packets, stop_event, udp_sock),
         daemon=True,
     )
     udp_thread.start()
-    server = serve_dashboard(runtime, args.http_host, args.http_port)
     print(f"F1Coach UDP listener: udp://{args.bind}:{args.port}")
     dashboard_url = f"http://{args.http_host}:{args.http_port}"
     print(f"Dashboard: {dashboard_url}")
-    print("Start driving in F1 24. Enter the game's theoretical best in the dashboard when available.")
+    print("Start driving in F1 24. Clean laps build a best-sector theoretical target.")
     if args.open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(dashboard_url)).start()
     try:
@@ -89,4 +105,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         stop_event.set()
         server.server_close()
+        udp_thread.join(timeout=1.0)
+        udp_sock.close()
     return 0
+
+
+def _print_socket_error(label: str, host: str, port: int, exc: OSError) -> None:
+    if isinstance(exc, socket.gaierror):
+        reason = str(exc)
+    elif exc.errno is not None:
+        reason = f"{exc.strerror or exc} (errno {exc.errno})"
+    else:
+        reason = str(exc)
+    print(f"Could not start {label} on {host}:{port}: {reason}", file=sys.stderr)
