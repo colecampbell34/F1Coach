@@ -21,6 +21,24 @@ class TelemetryRuntimeTests(unittest.TestCase):
         self.assertFalse(resumed["paused"])
         self.assertIn("existing data", resumed["notices"])
 
+    def test_lap_and_race_review_state_is_separate(self) -> None:
+        runtime = TelemetryRuntime()
+        lap = CompletedLap(1, 83_900, 27_000, 28_000, False, [])
+        race_lap = CompletedLap(1, 91_000, 30_000, 30_000, False, [])
+
+        runtime.snapshot("lap")
+        runtime.coach.completed_laps = [lap]
+        runtime.snapshot("race")
+        runtime.coach.completed_laps = [race_lap]
+
+        lap_state = runtime.snapshot("lap")
+        race_state = runtime.snapshot("race")
+
+        self.assertEqual(lap_state["completedLaps"][0]["lapTimeMs"], 83_900)
+        self.assertEqual(race_state["completedLaps"][0]["lapTimeMs"], 91_000)
+        self.assertEqual(lap_state["dashboardMode"], "lap")
+        self.assertEqual(race_state["dashboardMode"], "race")
+
     def test_new_session_clears_paused_packet_counts(self) -> None:
         runtime = TelemetryRuntime()
         runtime.paused_packet_counts["lap_data"] = 3
@@ -28,7 +46,7 @@ class TelemetryRuntimeTests(unittest.TestCase):
         state = runtime.start_new_session()
 
         self.assertEqual(state["pausedPackets"], {})
-        self.assertIn("Manual new session started.", state["notices"])
+        self.assertIn("Manual new lap review started.", state["notices"])
 
     def test_set_driving_goal_updates_snapshot(self) -> None:
         runtime = TelemetryRuntime()
@@ -101,7 +119,11 @@ class TelemetryRuntimeTests(unittest.TestCase):
 
         self.assertIn("F1Coach Garage Review", index)
         self.assertIn("Delta Circuit", index)
+        self.assertIn("Full Race Log", index)
+        self.assertIn("Quali Pace", index)
         self.assertIn("Race Overview", index)
+        self.assertNotIn("Setup Signals", index)
+        self.assertNotIn("data-view", index)
         self.assertIn("diagnostics", index)
         self.assertIn(".appShell", css)
         self.assertIn("function renderReviewHero", js)

@@ -151,6 +151,23 @@ class LapCoachTests(unittest.TestCase):
         self.assertEqual(summary["overview"]["topSpeedKmh"], 220)
         self.assertEqual(summary["overview"]["sampleCount"], 2)
 
+    def test_completed_lap_keeps_dense_brake_samples_for_trace(self) -> None:
+        coach = LapCoach(sample_buckets=2)
+        coach.active_lap_num = 1
+        coach.active_samples = [
+            self._sample(10_000, 0.100, 230, 0.90, 0.00),
+            self._sample(10_050, 0.101, 220, 0.20, 0.92),
+            self._sample(10_100, 0.102, 216, 0.05, 0.00),
+            self._sample(70_000, 0.700, 280, 1.00, 0.00),
+        ]
+
+        lap = coach._complete_lap(self._lap(lap_num=2, current_ms=100, last_ms=90_000, distance=10))
+
+        self.assertIsNotNone(lap)
+        assert lap is not None
+        self.assertIn(0.92, [sample.brake for sample in lap.samples])
+        self.assertEqual(len(lap.samples), 4)
+
     def test_snapshot_includes_full_race_review_power_ranking(self) -> None:
         coach = LapCoach(sample_buckets=30)
         laps = [
@@ -277,6 +294,18 @@ class LapCoachTests(unittest.TestCase):
         assert coach.best_lap is not None
         self.assertEqual(coach.best_lap.sector1_time_ms, 28_111)
         self.assertEqual(coach.best_lap.sector2_time_ms, 30_222)
+
+    def test_completed_laps_use_internal_counter_when_game_lap_number_resets(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.update(SessionInfo(self.header, 5000, 0, 10, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
+
+        coach.update(self._lap(lap_num=1, current_ms=50_000, last_ms=0, distance=3000))
+        coach.update(self._lap(lap_num=2, current_ms=100, last_ms=90_000, distance=10))
+        coach.update(self._lap(lap_num=1, current_ms=100, last_ms=0, distance=10))
+        coach.update(self._lap(lap_num=2, current_ms=100, last_ms=91_000, distance=10))
+
+        self.assertEqual([lap.lap_num for lap in coach.completed_laps], [1, 2])
 
     def test_track_change_starts_new_session(self) -> None:
         coach = LapCoach(sample_buckets=10)
@@ -410,6 +439,34 @@ class LapCoachTests(unittest.TestCase):
 
         self.assertTrue(any(insight.category == "ERS deployment" for insight in insights))
 
+    def test_ers_insight_stays_in_priority_stack(self) -> None:
+        coach = LapCoach(sample_buckets=30)
+        lap = CompletedLap(4, 80_000, 25_000, 27_000, False, [
+            self._sample(1_000, 0.02, 180, 0.05, 0.70),
+            self._sample(2_000, 0.04, 110, 0.10, 0.55),
+            self._sample(10_000, 0.20, 130, 0.70, 0.0, ers_j=100_000),
+            self._sample(10_500, 0.22, 165, 0.96, 0.0, ers_j=112_000),
+            self._sample(30_000, 0.55, 190, 0.20, 0.60),
+            self._sample(31_000, 0.57, 118, 0.10, 0.50),
+            self._sample(50_000, 0.82, 170, 0.10, 0.62),
+            self._sample(51_000, 0.84, 116, 0.10, 0.52),
+        ])
+        reference = ReferenceProfile("Imported", "test", 79_000, 24_500, 26_800, [
+            self._sample(1_000, 0.02, 190, 0.05, 0.45),
+            self._sample(1_450, 0.04, 126, 0.12, 0.30),
+            self._sample(10_000, 0.20, 138, 0.70, 0.0, ers_j=100_000),
+            self._sample(10_450, 0.22, 176, 1.00, 0.0, ers_j=130_000),
+            self._sample(30_000, 0.55, 201, 0.18, 0.40),
+            self._sample(30_450, 0.57, 132, 0.12, 0.26),
+            self._sample(50_000, 0.82, 184, 0.10, 0.42),
+            self._sample(50_450, 0.84, 130, 0.12, 0.28),
+        ])
+
+        insights = coach.analyze_lap(lap, reference)
+
+        self.assertEqual(len(insights), 3)
+        self.assertTrue(any(insight.category == "ERS deployment" for insight in insights))
+
     def test_reports_setup_trend_for_repeated_traction_loss(self) -> None:
         coach = LapCoach(sample_buckets=30)
         lap_samples = [
@@ -434,6 +491,22 @@ class LapCoachTests(unittest.TestCase):
         suggestions = coach._setup_suggestions(lap, reference)
 
         self.assertTrue(any("exit slip" in suggestion for suggestion in suggestions))
+
+    def test_setup_signals_include_baseline_when_no_pattern_is_detected(self) -> None:
+        coach = LapCoach(sample_buckets=30)
+        samples = [
+            self._sample(10_000, 0.10, 180, 0.55, 0.0),
+            self._sample(20_000, 0.30, 220, 0.90, 0.0),
+            self._sample(30_000, 0.60, 250, 1.00, 0.0),
+        ]
+        lap = CompletedLap(4, 90_000, 30_000, 30_000, False, samples)
+        reference = ReferenceProfile("Personal best", "test", 90_000, 30_000, 30_000, samples)
+        coach.latest_insights = []
+
+        suggestions = coach._setup_suggestions(lap, reference)
+
+        self.assertTrue(suggestions)
+        self.assertTrue(any("no clear setup change" in suggestion for suggestion in suggestions))
 
     def test_dynamic_context_adds_corner_specific_advice(self) -> None:
         coach = LapCoach(sample_buckets=30)

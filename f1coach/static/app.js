@@ -1,10 +1,15 @@
-const stateUrl = "/state";
+const dashboardMode = window.location.pathname.includes("race-overview") ? "race" : "lap";
+const stateUrl = `/state?mode=${encodeURIComponent(dashboardMode)}`;
 const mapCanvas = document.getElementById("trackMap");
 const traceCanvas = document.getElementById("trace");
 const pauseButton = document.getElementById("pauseButton");
 const newSessionButton = document.getElementById("newSessionButton");
+const goalToggle = document.querySelector(".goalToggle");
+const navLinks = {
+  lap: document.getElementById("lapReviewLink"),
+  race: document.getElementById("raceOverviewLink"),
+};
 const goalButtons = Array.from(document.querySelectorAll("[data-goal]"));
-const viewButtons = Array.from(document.querySelectorAll("[data-view]"));
 const dashboardViews = {
   lap: document.getElementById("lapView"),
   race: document.getElementById("raceView"),
@@ -12,12 +17,10 @@ const dashboardViews = {
 const appError = document.getElementById("appError");
 let selectedLapNum = null;
 let selectedInsightIndex = null;
-let selectedDashboardView = "lap";
+let selectedDashboardView = dashboardMode;
+let lastState = null;
 
 function initControls() {
-  viewButtons.forEach(button => {
-    button.addEventListener("click", () => switchDashboardView(button.dataset.view || "lap"));
-  });
   goalButtons.forEach(button => {
     button.addEventListener("click", () => withUiError(async () => {
       await sendControl("set-goal", { goal: button.dataset.goal });
@@ -34,19 +37,21 @@ function initControls() {
     if (!confirmed) return;
     selectedLapNum = null;
     selectedInsightIndex = null;
-    selectedDashboardView = "lap";
-    switchDashboardView(selectedDashboardView);
     await sendControl("new-session");
     await refresh();
   }));
   switchDashboardView(selectedDashboardView);
+  withUiError(async () => {
+    await sendControl("set-dashboard-mode", { mode: selectedDashboardView });
+    await refresh();
+  });
 }
 
 async function sendControl(action, payload = {}) {
   const response = await fetch("/control", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, ...payload }),
+    body: JSON.stringify({ action, mode: selectedDashboardView, ...payload }),
   });
   if (!response.ok) {
     const detail = await response.text();
@@ -58,19 +63,26 @@ async function refresh() {
   const response = await fetch(stateUrl, { cache: "no-store" });
   if (!response.ok) throw new Error(`State request failed: ${response.status}`);
   const state = await response.json();
+  lastState = state;
+  clearAppError();
+  renderSession(state);
+  renderActiveDashboard(state);
+}
+
+function renderActiveDashboard(state) {
+  if (selectedDashboardView === "race") {
+    renderRaceReview(state.raceReview || {});
+    return;
+  }
   const selectedLap = selectedLapFromState(state);
   const selectedInsights = selectedLapInsights(state, selectedLap);
   if (selectedInsightIndex !== null && selectedInsightIndex >= selectedInsights.length) selectedInsightIndex = null;
-  clearAppError();
-  renderSession(state);
   renderReviewHero(state, selectedLap, selectedInsights);
   renderPacketMix(state);
   renderDiagnostics(state.diagnostics || []);
   renderInsights(selectedInsights);
-  renderSetupInsights(state.setupInsights || []);
   renderLaps(state.completedLaps || []);
   renderFeed(state.notices || []);
-  renderRaceReview(state.raceReview || {});
   renderMap(state, selectedLap, selectedInsights);
   renderTrace(state, selectedLap, selectedInsights);
 }
@@ -81,7 +93,16 @@ function switchDashboardView(view) {
     if (!element) continue;
     element.hidden = name !== selectedDashboardView;
   }
-  viewButtons.forEach(button => button.classList.toggle("active", button.dataset.view === selectedDashboardView));
+  if (goalToggle) goalToggle.hidden = selectedDashboardView !== "lap";
+  for (const [name, link] of Object.entries(navLinks)) {
+    if (!link) continue;
+    const active = name === selectedDashboardView;
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
+  pauseButton.textContent = selectedDashboardView === "race" ? "Pause Race Capture" : "Pause Lap Capture";
+  newSessionButton.textContent = selectedDashboardView === "race" ? "New Race Review" : "New Lap Session";
 }
 
 function renderSession(state) {
@@ -90,7 +111,9 @@ function renderSession(state) {
   const trackLabel = session.trackName || (
     session.trackId !== null && session.trackId !== undefined ? `Track ${session.trackId}` : "Unknown track"
   );
-  const goalLabel = state.drivingGoal === "race" ? "Race review" : "Quali review";
+  const goalLabel = selectedDashboardView === "race"
+    ? "Full race overview"
+    : state.drivingGoal === "race" ? "Race-pace lap review" : "Qualifying lap review";
   document.getElementById("sessionLine").textContent = session.trackLengthM
     ? `${trackLabel} · ${session.trackLengthM} m · ${goalLabel}`
     : `${goalLabel} · waiting for F1 24`;
@@ -108,8 +131,11 @@ function renderSession(state) {
   document.getElementById("connectionLabel").textContent = state.paused ? "Capture paused" : packets > 0 ? "Capturing telemetry" : "No packets";
 
   pauseButton.dataset.paused = state.paused ? "true" : "false";
-  pauseButton.textContent = state.paused ? "Resume Capture" : "Pause Capture";
+  pauseButton.textContent = selectedDashboardView === "race"
+    ? state.paused ? "Resume Race Capture" : "Pause Race Capture"
+    : state.paused ? "Resume Lap Capture" : "Pause Lap Capture";
   pauseButton.classList.toggle("active", Boolean(state.paused));
+  newSessionButton.textContent = selectedDashboardView === "race" ? "New Race Review" : "New Lap Session";
   goalButtons.forEach(button => button.classList.toggle("active", button.dataset.goal === state.drivingGoal));
 }
 
@@ -158,6 +184,7 @@ function renderReviewProfile(selectedLap) {
     ["Braking", fmtPct(overview.brakingPct)],
     ["Overlap", fmtPct(overview.brakeThrottleOverlapPct)],
     ["Control", overview.controlScore === null || overview.controlScore === undefined ? "--" : `${overview.controlScore}/100`],
+    ["ERS used", fmtErs(selectedLap.ersUsedKj)],
   ];
   for (const [label, value] of metrics) {
     const pill = document.createElement("div");
@@ -239,6 +266,7 @@ function renderInsights(insights) {
 
 function renderSetupInsights(items) {
   const target = document.getElementById("setupInsights");
+  if (!target) return;
   target.innerHTML = "";
   if (!items.length) {
     target.appendChild(empty("Repeated ERS, traction, or balance patterns will appear after comparable laps."));
@@ -476,9 +504,7 @@ function renderRaceLapTable(rows) {
 }
 
 function renderMap(state, selectedLap, insights) {
-  const ctx = mapCanvas.getContext("2d");
-  const w = mapCanvas.width;
-  const h = mapCanvas.height;
+  const { ctx, w, h } = canvasContext(mapCanvas);
   clearCanvas(ctx, w, h);
   const selectedSamples = orderedMapSamples(selectedLap && selectedLap.samples || []);
   const fallbackSamples = orderedMapSamples(state.trackMap && state.trackMap.samples || []);
@@ -510,11 +536,9 @@ function renderMap(state, selectedLap, insights) {
 }
 
 function renderTrace(state, selectedLap, insights) {
-  const ctx = traceCanvas.getContext("2d");
-  const w = traceCanvas.width;
-  const h = traceCanvas.height;
+  const { ctx, w, h } = canvasContext(traceCanvas);
   clearCanvas(ctx, w, h);
-  const samples = selectedLap && selectedLap.samples ? orderedSamples(selectedLap.samples) : [];
+  const samples = selectedLap && selectedLap.samples ? orderedTraceSamples(selectedLap.samples) : [];
   const referenceSamples = referenceTraceSamples(state);
   document.getElementById("traceHint").textContent = selectedLap
     ? `Lap ${selectedLap.lapNum} speed, throttle, and brake by distance`
@@ -530,10 +554,12 @@ function renderTrace(state, selectedLap, insights) {
     drawSpeedTrace(ctx, referenceSamples, w, h, "rgba(255,255,255,.25)", 1.5);
     drawTrace(ctx, referenceSamples, w, h, "throttle", 1, "rgba(63,240,154,.24)", 1);
     drawTrace(ctx, referenceSamples, w, h, "brake", 1, "rgba(255,54,94,.24)", 1);
+    drawTracePoints(ctx, referenceSamples, w, h, "brake", 1, "rgba(255,54,94,.24)", 1.4, 0.04);
   }
   drawSpeedTrace(ctx, samples, w, h, "#ffd166", 2.5);
   drawTrace(ctx, samples, w, h, "throttle", 1, "#3ff09a", 2);
   drawTrace(ctx, samples, w, h, "brake", 1, "#ff365e", 2);
+  drawTracePoints(ctx, samples, w, h, "brake", 1, "#ff365e", 2.2, 0.04);
 }
 
 function drawTraceGrid(ctx, w, h) {
@@ -581,6 +607,19 @@ function drawTrace(ctx, samples, w, h, key, max, color, width) {
     else ctx.lineTo(x, y);
   });
   ctx.stroke();
+}
+
+function drawTracePoints(ctx, samples, w, h, key, max, color, radius, threshold = 0) {
+  ctx.fillStyle = color;
+  for (const s of samples) {
+    const raw = Number(s[key] || 0);
+    if (raw <= threshold) continue;
+    const x = 42 + s.normalizedDistance * (w - 70);
+    const y = h - 24 - Math.max(0, Math.min(1, raw / max)) * (h - 52);
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 function shadeTraceSegment(ctx, w, h, start, end) {
@@ -644,9 +683,9 @@ function selectedLapInsights(state, selectedLap) {
 
 function referenceTraceSamples(state) {
   if (state.reference && state.reference.samples && state.reference.samples.length) {
-    return orderedSamples(state.reference.samples);
+    return orderedTraceSamples(state.reference.samples);
   }
-  return orderedSamples(state.trackMap && state.trackMap.samples || []);
+  return orderedTraceSamples(state.trackMap && state.trackMap.samples || []);
 }
 
 function traceReferenceLabel(state) {
@@ -655,13 +694,22 @@ function traceReferenceLabel(state) {
 }
 
 function orderedSamples(samples) {
-  const byBucket = new Map();
-  for (const sample of samples || []) {
-    if (sample.normalizedDistance === null || sample.normalizedDistance === undefined) continue;
-    if (sample.normalizedDistance < 0 || sample.normalizedDistance > 1) continue;
-    byBucket.set(Math.round(sample.normalizedDistance * 1000), sample);
-  }
-  return Array.from(byBucket.values()).sort((a, b) => a.normalizedDistance - b.normalizedDistance);
+  return orderedTraceSamples(samples);
+}
+
+function orderedTraceSamples(samples) {
+  return (samples || [])
+    .filter(sample => (
+      sample.normalizedDistance !== null
+      && sample.normalizedDistance !== undefined
+      && sample.normalizedDistance >= 0
+      && sample.normalizedDistance <= 1
+    ))
+    .sort((a, b) => {
+      const distance = a.normalizedDistance - b.normalizedDistance;
+      if (distance !== 0) return distance;
+      return (a.lapTimeMs || 0) - (b.lapTimeMs || 0);
+    });
 }
 
 function orderedMapSamples(samples) {
@@ -745,6 +793,17 @@ function clearCanvas(ctx, w, h) {
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = "#0d0b12";
   ctx.fillRect(0, 0, w, h);
+}
+
+function canvasContext(canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width || canvas.clientWidth || canvas.width));
+  const height = Math.max(1, Math.round(rect.height || canvas.clientHeight || canvas.height));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  return { ctx: canvas.getContext("2d"), w: width, h: height };
 }
 
 function centerText(ctx, w, h, text) {

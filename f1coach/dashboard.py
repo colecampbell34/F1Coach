@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from time import monotonic
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from f1coach.adapters import F124Adapter, UnsupportedPacket
 from f1coach.coach import LapCoach, ReferenceProfile
@@ -22,12 +23,32 @@ STATIC_DIR = Path(__file__).with_name("static")
 class TelemetryRuntime:
     def __init__(self, reference: ReferenceProfile | None = None) -> None:
         self.adapter = F124Adapter()
-        self.coach = LapCoach(external_reference=reference, corner_metadata=FastF1CornerMetadata())
-        self.packet_counts: Counter[str] = Counter()
-        self.paused_packet_counts: Counter[str] = Counter()
-        self.last_sender: tuple[str, int] | None = None
+        self.coaches = {
+            "lap": LapCoach(external_reference=reference, corner_metadata=FastF1CornerMetadata()),
+            "race": LapCoach(external_reference=reference, corner_metadata=FastF1CornerMetadata(), driving_goal="race"),
+        }
+        self.packet_counts_by_mode: dict[str, Counter[str]] = {"lap": Counter(), "race": Counter()}
+        self.paused_packet_counts_by_mode: dict[str, Counter[str]] = {"lap": Counter(), "race": Counter()}
+        self.last_sender_by_mode: dict[str, tuple[str, int] | None] = {"lap": None, "race": None}
+        self.active_mode = "lap"
         self.paused = False
         self.lock = threading.Lock()
+
+    @property
+    def coach(self) -> LapCoach:
+        return self.coaches[self.active_mode]
+
+    @property
+    def packet_counts(self) -> Counter[str]:
+        return self.packet_counts_by_mode[self.active_mode]
+
+    @property
+    def paused_packet_counts(self) -> Counter[str]:
+        return self.paused_packet_counts_by_mode[self.active_mode]
+
+    @property
+    def last_sender(self) -> tuple[str, int] | None:
+        return self.last_sender_by_mode[self.active_mode]
 
     def process_packet(self, packet: bytes, sender: tuple[str, int], show_errors: bool = False) -> list[str]:
         try:
@@ -39,10 +60,11 @@ class TelemetryRuntime:
             return []
 
         with self.lock:
-            self.packet_counts[packet_name] += 1
-            self.last_sender = sender
+            mode = self.active_mode
+            self.packet_counts_by_mode[mode][packet_name] += 1
+            self.last_sender_by_mode[mode] = sender
             if self.paused:
-                self.paused_packet_counts[packet_name] += 1
+                self.paused_packet_counts_by_mode[mode][packet_name] += 1
                 return []
 
         try:
@@ -55,40 +77,53 @@ class TelemetryRuntime:
         with self.lock:
             if message is None:
                 return []
-            return self.coach.update(message)
+            return self.coaches[mode].update(message)
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, mode: str | None = None) -> dict[str, Any]:
         with self.lock:
-            return self._snapshot_unlocked()
+            if mode is not None:
+                self.active_mode = normalize_dashboard_mode(mode)
+            return self._snapshot_unlocked(self.active_mode)
 
-    def pause(self) -> dict[str, Any]:
+    def pause(self, mode: str | None = None) -> dict[str, Any]:
         with self.lock:
+            if mode is not None:
+                self.active_mode = normalize_dashboard_mode(mode)
             self.paused = True
-            return self._snapshot_unlocked()
+            return self._snapshot_unlocked(self.active_mode)
 
-    def resume(self) -> dict[str, Any]:
+    def resume(self, mode: str | None = None) -> dict[str, Any]:
         with self.lock:
+            if mode is not None:
+                self.active_mode = normalize_dashboard_mode(mode)
             self.paused = False
-            return self._snapshot_unlocked()
+            return self._snapshot_unlocked(self.active_mode)
 
-    def start_new_session(self) -> dict[str, Any]:
+    def start_new_session(self, mode: str | None = None) -> dict[str, Any]:
         with self.lock:
-            notices = self.coach.start_new_session("Manual new session started.")
-            self.coach._record_notices(notices)
-            self.paused_packet_counts.clear()
-            return self._snapshot_unlocked()
+            active_mode = normalize_dashboard_mode(mode) if mode is not None else self.active_mode
+            self.active_mode = active_mode
+            coach = self.coaches[active_mode]
+            label = "race review" if active_mode == "race" else "lap review"
+            notices = coach.start_new_session(f"Manual new {label} started.")
+            coach._record_notices(notices)
+            self.paused_packet_counts_by_mode[active_mode].clear()
+            return self._snapshot_unlocked(active_mode)
 
-    def set_driving_goal(self, goal: str) -> dict[str, Any]:
+    def set_driving_goal(self, goal: str, mode: str | None = None) -> dict[str, Any]:
         with self.lock:
-            notices = self.coach.set_driving_goal(goal)
-            self.coach._record_notices(notices)
-            return self._snapshot_unlocked()
+            active_mode = normalize_dashboard_mode(mode) if mode is not None else self.active_mode
+            self.active_mode = active_mode
+            notices = self.coaches[active_mode].set_driving_goal(goal)
+            self.coaches[active_mode]._record_notices(notices)
+            return self._snapshot_unlocked(active_mode)
 
-    def _snapshot_unlocked(self) -> dict[str, Any]:
-        state = self.coach.snapshot()
-        state["packets"] = dict(self.packet_counts)
-        state["pausedPackets"] = dict(self.paused_packet_counts)
-        state["lastSender"] = self.last_sender
+    def _snapshot_unlocked(self, mode: str) -> dict[str, Any]:
+        state = self.coaches[mode].snapshot()
+        state["dashboardMode"] = mode
+        state["packets"] = dict(self.packet_counts_by_mode[mode])
+        state["pausedPackets"] = dict(self.paused_packet_counts_by_mode[mode])
+        state["lastSender"] = self.last_sender_by_mode[mode]
         state["paused"] = self.paused
         state["diagnostics"] = self._diagnostics_unlocked(state)
         return state
@@ -269,19 +304,26 @@ def open_udp_socket(bind: str, port: int) -> socket.socket:
 def serve_dashboard(runtime: TelemetryRuntime, host: str, port: int) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            if self.path in {"/", "/index.html"}:
+            parsed = urlparse(self.path)
+            if parsed.path == "/":
+                self.send_response(302)
+                self.send_header("Location", "/lap-review")
+                self.end_headers()
+            elif parsed.path in {"/lap-review", "/race-overview", "/index.html"}:
                 self._send_static("text/html; charset=utf-8", "index.html")
-            elif self.path == "/app.css":
+            elif parsed.path == "/app.css":
                 self._send_static("text/css; charset=utf-8", "app.css")
-            elif self.path == "/app.js":
+            elif parsed.path == "/app.js":
                 self._send_static("application/javascript; charset=utf-8", "app.js")
-            elif self.path == "/state":
-                self._send("application/json; charset=utf-8", json.dumps(runtime.snapshot()))
+            elif parsed.path == "/state":
+                mode = _mode_from_query(parsed.query)
+                self._send("application/json; charset=utf-8", json.dumps(runtime.snapshot(mode)))
             else:
                 self.send_error(404)
 
         def do_POST(self) -> None:
-            if self.path != "/control":
+            parsed = urlparse(self.path)
+            if parsed.path != "/control":
                 self.send_error(404)
                 return
             length = int(self.headers.get("Content-Length", "0"))
@@ -292,20 +334,23 @@ def serve_dashboard(runtime: TelemetryRuntime, host: str, port: int) -> Threadin
                 self.send_error(400, "Invalid JSON")
                 return
             action = body.get("action")
+            mode = normalize_dashboard_mode(str(body.get("mode", runtime.active_mode)))
             if action == "pause":
-                self._send("application/json; charset=utf-8", json.dumps(runtime.pause()))
+                self._send("application/json; charset=utf-8", json.dumps(runtime.pause(mode)))
             elif action == "resume":
-                self._send("application/json; charset=utf-8", json.dumps(runtime.resume()))
+                self._send("application/json; charset=utf-8", json.dumps(runtime.resume(mode)))
             elif action == "new-session":
-                self._send("application/json; charset=utf-8", json.dumps(runtime.start_new_session()))
+                self._send("application/json; charset=utf-8", json.dumps(runtime.start_new_session(mode)))
             elif action == "set-goal":
                 goal = str(body.get("goal", ""))
                 try:
-                    state = runtime.set_driving_goal(goal)
+                    state = runtime.set_driving_goal(goal, mode)
                 except ValueError as exc:
                     self.send_error(400, str(exc))
                     return
                 self._send("application/json; charset=utf-8", json.dumps(state))
+            elif action == "set-dashboard-mode":
+                self._send("application/json; charset=utf-8", json.dumps(runtime.snapshot(mode)))
             else:
                 self.send_error(400, "Unknown control action")
 
@@ -330,6 +375,20 @@ def serve_dashboard(runtime: TelemetryRuntime, host: str, port: int) -> Threadin
             self._send(content_type, body)
 
     return ThreadingHTTPServer((host, port), Handler)
+
+
+def normalize_dashboard_mode(mode: str) -> str:
+    normalized = mode.strip().lower().replace("_", "-")
+    if normalized in {"lap", "lap-review", "single-lap", "single-lap-review"}:
+        return "lap"
+    if normalized in {"race", "race-overview", "full-race", "full-race-overview"}:
+        return "race"
+    return "lap"
+
+
+def _mode_from_query(query: str) -> str:
+    values = parse_qs(query).get("mode", ["lap"])
+    return normalize_dashboard_mode(values[0])
 
 
 def packet_name_for(packet_id: int) -> str:

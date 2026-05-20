@@ -21,13 +21,13 @@
       </div>
 
       <div class="heroControls">
-        <div class="viewToggle" role="group" aria-label="Dashboard view">
-          <button data-view="lap" type="button">Lap Review</button>
-          <button data-view="race" type="button">Race Overview</button>
-        </div>
-        <div class="goalToggle" role="group" aria-label="Coaching goal">
-          <button data-goal="qualifying" type="button">Quali</button>
-          <button data-goal="race" type="button">Race</button>
+        <nav class="dashboardNav" aria-label="Dashboard sections">
+          <a id="lapReviewLink" href="/lap-review">Lap Review</a>
+          <a id="raceOverviewLink" href="/race-overview">Race Overview</a>
+        </nav>
+        <div class="goalToggle" role="group" aria-label="Lap coaching target">
+          <button data-goal="qualifying" type="button">Quali Pace</button>
+          <button data-goal="race" type="button">Race Pace</button>
         </div>
         <button id="pauseButton" type="button">Pause Capture</button>
         <button id="newSessionButton" type="button">New Session</button>
@@ -123,16 +123,6 @@
           </div>
         </div>
         <div id="notices" class="feed"></div>
-      </section>
-
-      <section class="signalsPanel panel">
-        <div class="panelHeader">
-          <div>
-            <span class="eyebrow">Setup Signals</span>
-            <h2>Energy / Balance</h2>
-          </div>
-        </div>
-        <div id="setupInsights" class="feed compact"></div>
       </section>
 
       <section class="linkPanel panel">

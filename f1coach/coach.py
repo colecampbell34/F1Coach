@@ -147,6 +147,7 @@ class LapCoach:
         corner_metadata: Any | None = None,
     ) -> None:
         self.sample_buckets = sample_buckets
+        self.dashboard_sample_limit = max(1200, sample_buckets * 6)
         self.driving_goal = self._normalize_driving_goal(driving_goal)
         self.corner_metadata = corner_metadata
         self.track_length_m: int | None = None
@@ -159,6 +160,7 @@ class LapCoach:
         self.latest_motion_ex: MotionExSnapshot | None = None
         self.latest_lap: LapSnapshot | None = None
         self.active_lap_num: int | None = None
+        self.completed_lap_sequence = 0
         self.active_invalid = False
         self.active_game_invalid = False
         self.active_lap_frames = 0
@@ -206,6 +208,7 @@ class LapCoach:
         self.latest_motion_ex = None
         self.latest_lap = None
         self.active_lap_num = None
+        self.completed_lap_sequence = 0
         self._reset_active_lap_state()
         self.active_sector1_time_ms = 0
         self.active_sector2_time_ms = 0
@@ -316,13 +319,14 @@ class LapCoach:
         if self.active_lap_num is None or new_lap_snapshot.last_lap_time_ms <= 0:
             return None
         game_invalid = self._active_lap_game_invalid()
+        self.completed_lap_sequence += 1
         return CompletedLap(
-            lap_num=self.active_lap_num,
+            lap_num=self.completed_lap_sequence,
             lap_time_ms=new_lap_snapshot.last_lap_time_ms,
             sector1_time_ms=self.active_sector1_time_ms,
             sector2_time_ms=self.active_sector2_time_ms,
             invalid=self._active_lap_invalid(),
-            samples=self._dedupe_samples(self.active_samples),
+            samples=self._preserve_lap_samples(self.active_samples),
             game_invalid=game_invalid,
             fuel_kg=self.latest_status.fuel_in_tank_kg if self.latest_status is not None else None,
             fuel_remaining_laps=self.latest_status.fuel_remaining_laps if self.latest_status is not None else None,
@@ -578,7 +582,7 @@ class LapCoach:
             if None in {lap_start, lap_end, ref_start, ref_end}:
                 continue
             delta_ms = int((lap_end - lap_start) - (ref_end - ref_start))
-            if delta_ms < 60:
+            if delta_ms < 40:
                 continue
             lap_segment = self._samples_between(lap.samples, start, end)
             ref_segment = self._samples_between(reference.samples, start, end)
@@ -596,7 +600,15 @@ class LapCoach:
                 )
             )
 
-        return sorted(insights, key=lambda insight: insight.time_delta_ms, reverse=True)[:3]
+        ranked = sorted(insights, key=lambda insight: insight.time_delta_ms, reverse=True)
+        selected = ranked[:3]
+        ers_insight = next(
+            (insight for insight in ranked if insight.category in {"ERS deployment", "ERS waste"}),
+            None,
+        )
+        if ers_insight is not None and ers_insight not in selected:
+            selected = [*selected[:2], ers_insight]
+        return selected
 
     def reference_profile(self) -> ReferenceProfile | None:
         sector_theoretical = self._sector_theoretical_reference()
@@ -877,8 +889,8 @@ class LapCoach:
         full_throttle_ers_zone = avg_throttle > 0.80 and avg_brake < 0.08 and avg_slip < 0.24
         if (
             ers_delta_kj is not None
-            and ers_delta_kj < -20
-            and avg_speed_delta < -4
+            and ers_delta_kj < -8
+            and avg_speed_delta < -2
             and (exit_phase or full_throttle_ers_zone)
         ):
             category = "ERS deployment"
@@ -890,7 +902,7 @@ class LapCoach:
                 "first half of the following straight unless you are protecting charge for a longer DRS run."
             )
             setup_hint = None
-        elif ers_delta_kj is not None and ers_delta_kj > 50 and (avg_brake > 0.15 or avg_throttle < 0.35):
+        elif ers_delta_kj is not None and ers_delta_kj > 25 and (avg_brake > 0.12 or avg_throttle < 0.50):
             category = "ERS waste"
             detail = f"{area}: ERS use is front-loaded into a braking or partial-throttle phase."
             recommendation = (
@@ -1080,7 +1092,40 @@ class LapCoach:
         return by_bucket
 
     def _dedupe_samples(self, samples: list[LapSample]) -> list[LapSample]:
-        return list(self._bucket_samples(samples).values())
+        return self._ordered_lap_samples(list(self._bucket_samples(samples).values()))
+
+    def _preserve_lap_samples(self, samples: list[LapSample]) -> list[LapSample]:
+        ordered = self._ordered_lap_samples(samples)
+        if len(ordered) <= self.dashboard_sample_limit:
+            return ordered
+
+        buckets: dict[int, list[LapSample]] = {}
+        for sample in ordered:
+            buckets.setdefault(self._bucket(sample.normalized_distance), []).append(sample)
+
+        selected: dict[int, LapSample] = {}
+
+        def keep(sample: LapSample | None) -> None:
+            if sample is not None:
+                selected[id(sample)] = sample
+
+        for bucket in sorted(buckets):
+            group = buckets[bucket]
+            keep(group[0])
+            keep(group[-1])
+            keep(max(group, key=lambda sample: sample.brake))
+            keep(max(group, key=lambda sample: sample.throttle))
+            keep(min(group, key=lambda sample: sample.speed_kmh))
+            keep(max(group, key=lambda sample: abs(sample.steer)))
+
+        return self._ordered_lap_samples(list(selected.values()))
+
+    def _samples_for_dashboard(self, samples: list[LapSample]) -> list[LapSample]:
+        return self._preserve_lap_samples(samples)
+
+    @staticmethod
+    def _ordered_lap_samples(samples: list[LapSample]) -> list[LapSample]:
+        return sorted(samples, key=lambda sample: (sample.normalized_distance, sample.lap_time_ms))
 
     def _time_at(self, samples: list[LapSample], normalized_distance: float) -> int | None:
         if not samples:
@@ -1119,9 +1164,6 @@ class LapCoach:
         if reference is None or not lap.samples or not reference.samples:
             return []
         insights = self.latest_insights
-        if not insights:
-            return []
-
         categories = {insight.category: 0 for insight in insights}
         for insight in insights:
             categories[insight.category] = categories.get(insight.category, 0) + 1
@@ -1131,6 +1173,9 @@ class LapCoach:
         )
         lap_steer = self._avg(abs(sample.steer) for sample in lap.samples if sample.speed_kmh > 120)
         ref_steer = self._avg(abs(sample.steer) for sample in reference.samples if sample.speed_kmh > 120)
+        overview = self._lap_overview(lap)
+        overlap = float(overview.get("brakeThrottleOverlapPct") or 0.0)
+        steering_throttle = float(overview.get("steeringThrottlePct") or 0.0)
 
         suggestions: list[str] = []
         if categories.get("traction", 0) >= 2 or lap_slip > 0.25:
@@ -1142,11 +1187,22 @@ class LapCoach:
         if categories.get("ERS deployment", 0) >= 2:
             suggestions.append("Energy: deploy earlier on exits that lead onto long full-throttle sections.")
         suggestions.extend(self._dynamic_setup_suggestions(insights, lap, reference))
+        if not suggestions:
+            if lap_slip > 0.20:
+                suggestions.append("Setup watch: rear slip is elevated, but confirm with another comparable lap before changing diff or rear wing.")
+            if lap_steer > ref_steer + 0.08:
+                suggestions.append("Setup watch: steering demand is higher than the reference; first confirm line and entry speed before adding front support.")
+            if overlap >= 6.0:
+                suggestions.append("Balance signal: pedal overlap is high enough to mask setup feel; clean brake release before changing bias.")
+            if steering_throttle >= 12.0:
+                suggestions.append("Traction signal: high throttle with steering lock is showing up; fix exit shape before softening the rear.")
+        if not suggestions:
+            suggestions.append("Setup: no clear setup change from this lap. Keep the baseline stable and use Focus Stack for driving inputs.")
         if self.driving_goal == "race" and suggestions:
             suggestions.append("Race pace: choose the fix that stays stable over tyre life.")
         elif self.driving_goal == "qualifying" and suggestions:
             suggestions.append("Qualifying: prioritize the biggest exit loss before the next straight.")
-        return suggestions[:2]
+        return suggestions[:3]
 
     def _reference_source_for(self, reference: ReferenceProfile, start: float, end: float) -> str | None:
         if not reference.segments:
@@ -1253,7 +1309,7 @@ class LapCoach:
             },
             "trackMap": {
                 "source": map_source,
-                "samples": [self._sample_to_dict(sample) for sample in map_samples[-900:]],
+                "samples": [self._sample_to_dict(sample) for sample in self._samples_for_dashboard(map_samples)],
             },
             "bestLap": self._lap_summary(best_lap, reference, analysis_reference=analysis_reference) if best_lap else None,
             "reference": self._reference_to_dict(reference) if reference else None,
@@ -1333,7 +1389,7 @@ class LapCoach:
             else [],
         }
         if include_samples:
-            summary["samples"] = [self._sample_to_dict(sample) for sample in lap.samples[-700:]]
+            summary["samples"] = [self._sample_to_dict(sample) for sample in self._samples_for_dashboard(lap.samples)]
         return summary
 
     def _race_review(self, reference: ReferenceProfile | None) -> dict[str, Any]:
@@ -2317,7 +2373,7 @@ class LapCoach:
             "synthetic": reference.synthetic,
             "assistProfile": reference.assist_profile,
             "segments": [asdict(segment) for segment in reference.segments],
-            "samples": [self._sample_to_dict(sample) for sample in reference.samples[-700:]],
+            "samples": [self._sample_to_dict(sample) for sample in self._samples_for_dashboard(reference.samples)],
         }
 
     @staticmethod
