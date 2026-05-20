@@ -48,6 +48,7 @@ class SessionInfo:
     weather: int
     air_temperature_c: int
     track_temperature_c: int
+    safety_car_status: int = 0
 
 
 @dataclass(frozen=True, slots=True)

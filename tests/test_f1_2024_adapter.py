@@ -32,6 +32,21 @@ class F124AdapterTests(unittest.TestCase):
         self.assertEqual(message.track_id, 7)
         self.assertEqual(message.air_temperature_c, 24)
 
+    def test_decodes_session_safety_car_status_when_available(self) -> None:
+        payload = (
+            struct.pack(self.adapter.SESSION_PREFIX_FORMAT, 1, 31, 24, 5, 5412, 10, 7, 0, 600, 900)
+            + (b"\x00" * 6)
+            + (b"\x00" * 21 * 5)
+            + b"\x02"
+        )
+        packet = self._header(PacketId.SESSION) + payload
+
+        message = self.adapter.decode(packet)
+
+        self.assertIsInstance(message, SessionInfo)
+        assert isinstance(message, SessionInfo)
+        self.assertEqual(message.safety_car_status, 2)
+
     def test_decodes_player_lap_data(self) -> None:
         car = struct.pack(
             self.adapter.LAP_DATA_FORMAT,

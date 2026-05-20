@@ -150,6 +150,27 @@ button.active {
 .goalToggle button.active {
   background: linear-gradient(135deg, rgba(255,209,102,.20), rgba(255,54,94,.15));
 }
+.viewToggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  min-width: 244px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0,0,0,.25);
+}
+.viewToggle button {
+  border-color: transparent;
+  background: transparent;
+}
+.viewToggle button.active {
+  background: linear-gradient(135deg, rgba(69,214,255,.18), rgba(255,209,102,.14));
+  color: var(--cyan);
+}
+.dashboardView[hidden] {
+  display: none !important;
+}
 .reviewGrid {
   min-height: 0;
   height: 100%;
@@ -518,6 +539,290 @@ canvas {
   border-radius: inherit;
   background: linear-gradient(90deg, var(--red), var(--yellow), var(--cyan));
 }
+.raceGrid {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) minmax(260px, .9fr) minmax(260px, .9fr) minmax(280px, .95fr);
+  grid-template-rows: 172px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px;
+}
+.raceHero {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 282px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 0;
+}
+.raceScoreCard {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(255,54,94,.22), rgba(255,209,102,.08) 48%, rgba(69,214,255,.14)),
+    var(--surface);
+}
+.scoreDial {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.scoreDial strong {
+  color: var(--text);
+  font-size: 52px;
+  line-height: .9;
+}
+.scoreDial span {
+  color: var(--yellow);
+  font-size: 17px;
+  font-weight: 800;
+}
+.raceScoreCard h2 {
+  font-size: 20px;
+}
+.raceScoreCard p {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.28;
+}
+.raceSummary {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+.raceSummary div {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.04), transparent 58%),
+    var(--surface-2);
+}
+.raceSummary span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.raceSummary strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.08;
+}
+.powerPanel { grid-column: 1; grid-row: 2; }
+.phasePanel { grid-column: 2; grid-row: 2; }
+.riskPanel { grid-column: 3; grid-row: 2; }
+.standoutPanel { grid-column: 4; grid-row: 2; }
+.raceTablePanel { grid-column: 1 / span 2; grid-row: 3; }
+.sectorPanel { grid-column: 3; grid-row: 3; }
+.racePlanPanel { grid-column: 4; grid-row: 3; }
+.powerFactors, .racePhases, .raceSectors, .raceRisks, .raceStandouts, .racePlan {
+  min-height: 0;
+  height: calc(100% - 42px);
+  overflow: auto;
+  padding: 6px;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+.factorCard, .phaseCard, .riskCard, .standoutCard, .planStep, .sectorRow {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.factorCard {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+}
+.factorTop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.factorTop strong, .phaseCard strong, .riskCard strong, .standoutCard strong, .sectorRow strong {
+  color: var(--text);
+}
+.factorTop span {
+  color: var(--yellow);
+  font-weight: 900;
+}
+.scoreBar {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255,255,255,.08);
+}
+.scoreBar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--red), var(--yellow), var(--green));
+}
+.factorCard p, .phaseCard p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.28;
+}
+.factorEvidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.factorEvidence span {
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: rgba(69,214,255,.11);
+  color: var(--cyan);
+  font-size: 11px;
+}
+.phaseCard {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+}
+.phaseCard > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.phaseCard > div:first-child span {
+  color: var(--yellow);
+  font-size: 12px;
+  font-weight: 800;
+}
+.miniMetrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+.metricPill {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 5px 6px;
+  border-radius: 8px;
+  background: rgba(8,7,10,.45);
+}
+.metricPill span {
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.metricPill strong {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.1;
+}
+.riskCard, .standoutCard, .planStep {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+.riskCard {
+  border-left: 4px solid var(--yellow);
+}
+.riskCard.high { border-left-color: var(--red); }
+.riskCard.medium { border-left-color: var(--orange); }
+.riskCard.low { border-left-color: var(--cyan); }
+.riskCard.ok { border-left-color: var(--green); }
+.riskCard span, .standoutCard small, .riskCard small, .planStep span {
+  font-size: 12px;
+  line-height: 1.3;
+}
+.riskCard small, .planStep span {
+  color: var(--cyan);
+}
+.standoutCard {
+  border-left: 4px solid var(--yellow);
+}
+.standoutCard.gain { border-left-color: var(--green); }
+.standoutCard.loss { border-left-color: var(--red); }
+.standoutCard .metric {
+  color: var(--yellow);
+  font-weight: 900;
+}
+.planStep {
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: start;
+}
+.planStep strong {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--red);
+  color: var(--text);
+}
+.sectorRow {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 3px 8px;
+  padding: 8px;
+}
+.sectorRow strong {
+  grid-row: span 4;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(255,209,102,.13);
+  color: var(--yellow);
+}
+.sectorRow span {
+  font-size: 12px;
+  line-height: 1.22;
+}
+.raceTableWrap {
+  height: calc(100% - 42px);
+  overflow: auto;
+}
+.raceTable {
+  width: 100%;
+  min-width: 840px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.raceTable th, .raceTable td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.raceTable th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.raceTable td {
+  color: var(--muted);
+  line-height: 1.3;
+}
+.raceTable tr.invalid td {
+  color: var(--quiet);
+  background: rgba(255,54,94,.06);
+}
+.raceTable tr.excluded td {
+  color: var(--quiet);
+  background: rgba(255,209,102,.045);
+}
 @media (max-width: 1220px) {
   body { overflow: auto; }
   .appShell {
@@ -529,12 +834,27 @@ canvas {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto 520px auto 260px auto auto auto;
   }
+  .raceGrid {
+    height: auto;
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+  }
   .reviewHero, .lapShelf, .circuitPanel, .focusPanel, .tracePanel, .notesPanel, .signalsPanel, .linkPanel {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .raceHero, .powerPanel, .phasePanel, .sectorPanel, .riskPanel, .standoutPanel, .racePlanPanel, .raceTablePanel {
     grid-column: 1;
     grid-row: auto;
   }
   .reviewHero {
     grid-template-columns: 1fr;
+  }
+  .raceHero {
+    grid-template-columns: 1fr;
+  }
+  .raceSummary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .reviewStats {
     min-width: 0;
@@ -542,9 +862,12 @@ canvas {
   .reviewProfile {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  .lapList, .insights, .feed {
+  .lapList, .insights, .feed, .powerFactors, .racePhases, .raceSectors, .raceRisks, .raceStandouts, .racePlan {
     height: auto;
     max-height: 340px;
+  }
+  .raceTableWrap {
+    max-height: 420px;
   }
   .circuitPanel { min-height: 520px; }
   .tracePanel { min-height: 260px; }
@@ -562,7 +885,14 @@ canvas {
   .heroControls > button, .goalToggle {
     flex: 1 1 150px;
   }
+  .viewToggle {
+    flex: 1 1 240px;
+  }
   .reviewGrid {
+    padding: 10px;
+    gap: 10px;
+  }
+  .raceGrid {
     padding: 10px;
     gap: 10px;
   }
@@ -574,6 +904,12 @@ canvas {
   }
   .reviewProfile {
     grid-template-columns: 1fr 1fr;
+  }
+  .raceSummary {
+    grid-template-columns: 1fr 1fr;
+  }
+  .scoreDial strong {
+    font-size: 44px;
   }
   .mapLegend, .traceLegend {
     justify-content: flex-start;

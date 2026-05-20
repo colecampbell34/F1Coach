@@ -21,6 +21,10 @@
       </div>
 
       <div class="heroControls">
+        <div class="viewToggle" role="group" aria-label="Dashboard view">
+          <button data-view="lap" type="button">Lap Review</button>
+          <button data-view="race" type="button">Race Overview</button>
+        </div>
         <div class="goalToggle" role="group" aria-label="Coaching goal">
           <button data-goal="qualifying" type="button">Quali</button>
           <button data-goal="race" type="button">Race</button>
@@ -31,7 +35,7 @@
       <div id="appError" class="appError" role="status" aria-live="polite"></div>
     </header>
 
-    <main class="reviewGrid">
+    <main id="lapView" class="reviewGrid dashboardView">
       <section class="reviewHero">
         <div class="reviewCopy">
           <span class="eyebrow">Selected Lap</span>
@@ -146,6 +150,132 @@
         </div>
         <div id="packetMix" class="packetMix"></div>
         <div id="diagnostics" class="diagnostics"></div>
+      </section>
+    </main>
+
+    <main id="raceView" class="raceGrid dashboardView" hidden>
+      <section class="raceHero">
+        <div class="raceScoreCard">
+          <span class="eyebrow">Power Ranking</span>
+          <div class="scoreDial">
+            <strong id="racePowerScore">--</strong>
+            <span>/10</span>
+          </div>
+          <h2 id="racePowerLabel">No rating</h2>
+          <p id="racePowerMeta">Complete laps to build a race power ranking.</p>
+        </div>
+        <div class="raceSummary">
+          <div>
+            <span>Race Time</span>
+            <strong id="raceTotalTime">--</strong>
+          </div>
+          <div>
+            <span>Ranked Laps</span>
+            <strong id="raceClassified">--</strong>
+          </div>
+          <div>
+            <span>Best Lap</span>
+            <strong id="raceBestLap">--</strong>
+          </div>
+          <div>
+            <span>Avg Lap</span>
+            <strong id="raceAverageLap">--</strong>
+          </div>
+          <div>
+            <span>Consistency</span>
+            <strong id="raceConsistency">--</strong>
+          </div>
+          <div>
+            <span>Finish Trend</span>
+            <strong id="raceTrend">--</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="powerPanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Ranking Model</span>
+            <h2>Power Factors</h2>
+          </div>
+        </div>
+        <div id="powerFactors" class="powerFactors"></div>
+      </section>
+
+      <section class="phasePanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Stint Shape</span>
+            <h2>Race Phases</h2>
+          </div>
+        </div>
+        <div id="racePhases" class="racePhases"></div>
+      </section>
+
+      <section class="sectorPanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Sector Command</span>
+            <h2>Where Pace Lived</h2>
+          </div>
+        </div>
+        <div id="raceSectors" class="raceSectors"></div>
+      </section>
+
+      <section class="riskPanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Race Risks</span>
+            <h2>Execution Register</h2>
+          </div>
+        </div>
+        <div id="raceRisks" class="raceRisks"></div>
+      </section>
+
+      <section class="standoutPanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Race Story</span>
+            <h2>Standout Laps</h2>
+          </div>
+        </div>
+        <div id="raceStandouts" class="raceStandouts"></div>
+      </section>
+
+      <section class="racePlanPanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Next Run</span>
+            <h2>Race Plan</h2>
+          </div>
+        </div>
+        <div id="racePlan" class="racePlan"></div>
+      </section>
+
+      <section class="raceTablePanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Lap By Lap</span>
+            <h2>Full Race Log</h2>
+          </div>
+        </div>
+        <div class="raceTableWrap">
+          <table class="raceTable">
+            <thead>
+              <tr>
+                <th>Lap</th>
+                <th>Time</th>
+                <th>Δ Best</th>
+                <th>Δ Ref</th>
+                <th>Sectors</th>
+                <th>Control</th>
+                <th>Tyre / Fuel</th>
+                <th>Trace Note</th>
+              </tr>
+            </thead>
+            <tbody id="raceLapTable"></tbody>
+          </table>
+        </div>
       </section>
     </main>
   </div>

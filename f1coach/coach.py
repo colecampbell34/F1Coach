@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field, replace
 from time import monotonic
 from typing import Any
@@ -51,11 +52,26 @@ class CompletedLap:
     fuel_remaining_laps: float | None = None
     actual_tyre_compound: int | None = None
     visual_tyre_compound: int | None = None
+    pit_statuses: tuple[int, ...] = ()
+    safety_car_statuses: tuple[int, ...] = ()
+    fia_flag_statuses: tuple[int, ...] = ()
 
     @property
     def sector3_time_ms(self) -> int:
         sector3 = self.lap_time_ms - self.sector1_time_ms - self.sector2_time_ms
         return max(0, sector3)
+
+    @property
+    def pit_lap(self) -> bool:
+        return any(status > 0 for status in self.pit_statuses)
+
+    @property
+    def safety_car_lap(self) -> bool:
+        return any(status > 0 for status in self.safety_car_statuses)
+
+    @property
+    def non_green_flag_lap(self) -> bool:
+        return any(status not in {0, 1} for status in self.fia_flag_statuses)
 
 
 @dataclass(slots=True)
@@ -136,6 +152,7 @@ class LapCoach:
         self.track_length_m: int | None = None
         self.track_id: int | None = None
         self.session_type: int | None = None
+        self.safety_car_status = 0
         self.latest_telemetry: CarTelemetrySnapshot | None = None
         self.latest_status: CarStatusSnapshot | None = None
         self.latest_motion: MotionSnapshot | None = None
@@ -149,6 +166,9 @@ class LapCoach:
         self.active_invalid_streak = 0
         self.active_max_invalid_streak = 0
         self.active_latest_invalid = False
+        self.active_pit_statuses: set[int] = set()
+        self.active_safety_car_statuses: set[int] = set()
+        self.active_fia_flag_statuses: set[int] = set()
         self.active_sector1_time_ms = 0
         self.active_sector2_time_ms = 0
         self.active_samples: list[LapSample] = []
@@ -179,6 +199,7 @@ class LapCoach:
         self.track_length_m = track_length_m
         self.track_id = track_id
         self.session_type = session_type
+        self.safety_car_status = 0
         self.latest_telemetry = None
         self.latest_status = None
         self.latest_motion = None
@@ -224,6 +245,7 @@ class LapCoach:
     def _update_session(self, message: SessionInfo) -> list[str]:
         notices: list[str] = []
         self.session_type = message.session_type
+        self.safety_car_status = message.safety_car_status
         track_changed = (
             self.track_length_m is not None
             and message.track_length_m > 0
@@ -268,7 +290,7 @@ class LapCoach:
             if completed is not None:
                 notices.extend(self._summarize_completed_lap(completed))
                 self.completed_laps.append(completed)
-                self.completed_laps = self.completed_laps[-20:]
+                self.completed_laps = self.completed_laps[-120:]
             self.active_lap_num = lap.current_lap_num
             self._reset_active_lap_state()
             self.active_sector1_time_ms = 0
@@ -276,6 +298,7 @@ class LapCoach:
             self.active_samples = []
 
         self._record_invalid_flag(lap.current_lap_invalid)
+        self._record_lap_conditions(lap)
         self.active_invalid = self._active_lap_invalid()
         if lap.sector1_time_ms > 0:
             self.active_sector1_time_ms = lap.sector1_time_ms
@@ -305,6 +328,9 @@ class LapCoach:
             fuel_remaining_laps=self.latest_status.fuel_remaining_laps if self.latest_status is not None else None,
             actual_tyre_compound=self.latest_status.actual_tyre_compound if self.latest_status is not None else None,
             visual_tyre_compound=self.latest_status.visual_tyre_compound if self.latest_status is not None else None,
+            pit_statuses=tuple(sorted(self.active_pit_statuses)),
+            safety_car_statuses=tuple(sorted(self.active_safety_car_statuses)),
+            fia_flag_statuses=tuple(sorted(self.active_fia_flag_statuses)),
         )
 
     def _reset_active_lap_state(self) -> None:
@@ -315,6 +341,9 @@ class LapCoach:
         self.active_invalid_streak = 0
         self.active_max_invalid_streak = 0
         self.active_latest_invalid = False
+        self.active_pit_statuses = set()
+        self.active_safety_car_statuses = set()
+        self.active_fia_flag_statuses = set()
 
     def _record_invalid_flag(self, invalid: bool) -> None:
         self.active_lap_frames += 1
@@ -339,6 +368,14 @@ class LapCoach:
         if self._is_practice_session():
             return False
         return True
+
+    def _record_lap_conditions(self, lap: LapSnapshot) -> None:
+        if lap.pit_status > 0:
+            self.active_pit_statuses.add(lap.pit_status)
+        if self.safety_car_status > 0:
+            self.active_safety_car_statuses.add(self.safety_car_status)
+        if self.latest_status is not None and self.latest_status.vehicle_fia_flags not in {0, 1}:
+            self.active_fia_flag_statuses.add(self.latest_status.vehicle_fia_flags)
 
     def _is_practice_session(self) -> bool:
         return self.session_type in {1, 2, 3, 4}
@@ -1202,6 +1239,7 @@ class LapCoach:
                 "trackName": track_name_for_id(self.track_id),
                 "trackLengthM": self.track_length_m,
                 "sessionType": self.session_type,
+                "safetyCarStatus": self.safety_car_status,
             },
             "cornerMetadata": self._corner_metadata_status(),
             "drivingGoal": self.driving_goal,
@@ -1228,6 +1266,7 @@ class LapCoach:
                 )
                 for lap in self.completed_laps[-20:]
             ],
+            "raceReview": self._race_review(reference),
             "insights": [asdict(insight) for insight in self.latest_insights],
             "setupInsights": self.latest_setup_suggestions,
             "notices": self.notices[-12:],
@@ -1257,6 +1296,7 @@ class LapCoach:
         reference: ReferenceProfile | None = None,
         include_samples: bool = False,
         analysis_reference: ReferenceProfile | None = None,
+        include_insights: bool = True,
     ) -> dict[str, Any]:
         if reference is not None and reference.source == "sector-theoretical":
             insight_reference = reference
@@ -1276,15 +1316,840 @@ class LapCoach:
             "actualTyreCompound": lap.actual_tyre_compound,
             "visualTyreCompound": lap.visual_tyre_compound,
             "tyreCompound": self._tyre_label(lap.visual_tyre_compound, lap.actual_tyre_compound),
+            "pitLap": lap.pit_lap,
+            "pitStatuses": list(lap.pit_statuses),
+            "safetyCarLap": lap.safety_car_lap,
+            "safetyCarStatuses": list(lap.safety_car_statuses),
+            "nonGreenFlagLap": lap.non_green_flag_lap,
+            "fiaFlagStatuses": list(lap.fia_flag_statuses),
             "overview": self._lap_overview(lap),
             "overviewNotes": self._lap_overview_notes(lap),
             "invalid": lap.invalid,
             "gameInvalid": lap.game_invalid,
-            "insights": [asdict(insight) for insight in self.analyze_lap(lap, insight_reference)],
+            "insights": [
+                asdict(insight) for insight in self.analyze_lap(lap, insight_reference)
+            ]
+            if include_insights
+            else [],
         }
         if include_samples:
             summary["samples"] = [self._sample_to_dict(sample) for sample in lap.samples[-700:]]
         return summary
+
+    def _race_review(self, reference: ReferenceProfile | None) -> dict[str, Any]:
+        laps = self.completed_laps[-120:]
+        if not laps:
+            return {
+                "status": "waiting",
+                "summary": {
+                    "totalLaps": 0,
+                    "cleanLaps": 0,
+                    "invalidLaps": 0,
+                    "raceTime": "--",
+                    "bestLap": None,
+                    "averageLapTime": "--",
+                    "consistency": "--",
+                    "trend": "--",
+                },
+                "powerRanking": {
+                    "score": None,
+                    "label": "No rating",
+                    "confidence": "Waiting for laps",
+                    "explanation": "Complete laps to build a race power ranking.",
+                },
+                "factors": [],
+                "phaseBreakdown": [],
+                "sectorTrend": [],
+                "standoutLaps": [],
+                "riskRegister": [],
+                "recommendations": [],
+                "lapTable": [],
+            }
+
+        rows = self._race_lap_rows(laps, reference)
+        clean_laps = [lap for lap in laps if not lap.invalid]
+        scored_lap_nums = {row["lapNum"] for row in rows if row.get("rankingEligible")}
+        scored_laps = [lap for lap in laps if lap.lap_num in scored_lap_nums]
+        scored_times = [lap.lap_time_ms for lap in scored_laps]
+        best_lap = min(scored_laps or clean_laps, key=lambda lap: lap.lap_time_ms, default=None)
+        total_ms = sum(lap.lap_time_ms for lap in laps)
+        avg_lap_ms = round(self._avg(scored_times)) if scored_times else None
+        stdev_ms = round(self._stddev(scored_times)) if len(scored_times) >= 2 else None
+        volatility_ms = self._lap_time_volatility(scored_laps)
+        longest_scored_streak = self._longest_scored_streak(rows)
+        valid_pct = round(len(clean_laps) / len(laps) * 100, 1) if laps else 0.0
+        scored_pct = round(len(scored_laps) / len(laps) * 100, 1) if laps else 0.0
+        avg_delta_to_best = None
+        if best_lap is not None and scored_laps:
+            avg_delta_to_best = round(self._avg(lap.lap_time_ms - best_lap.lap_time_ms for lap in scored_laps))
+        avg_delta_to_reference = None
+        if reference is not None and scored_laps:
+            avg_delta_to_reference = round(self._avg(lap.lap_time_ms - reference.lap_time_ms for lap in scored_laps))
+
+        phases = self._race_phase_breakdown(scored_laps, reference)
+        opening_avg_ms = phases[0]["averageLapTimeMs"] if phases else None
+        closing_avg_ms = phases[-1]["averageLapTimeMs"] if len(phases) >= 2 else None
+        trend_ms = (
+            int(closing_avg_ms - opening_avg_ms)
+            if opening_avg_ms is not None and closing_avg_ms is not None
+            else None
+        )
+        factors = self._race_power_factors(
+            laps,
+            rows,
+            scored_laps,
+            reference,
+            avg_delta_to_best,
+            stdev_ms,
+            volatility_ms,
+            trend_ms,
+            longest_scored_streak,
+        )
+        score = self._weighted_power_score(factors)
+        label = self._power_label(score)
+        confidence = self._power_confidence(len(scored_laps))
+        risk_register = self._race_risk_register(rows, scored_laps, stdev_ms, volatility_ms, trend_ms)
+        recommendations = self._race_recommendations(factors, risk_register, phases, reference)
+
+        return {
+            "status": "ready" if scored_laps else "needs-representative-lap",
+            "summary": {
+                "totalLaps": len(laps),
+                "cleanLaps": len(clean_laps),
+                "scoredLaps": len(scored_laps),
+                "excludedLaps": len(laps) - len(scored_laps),
+                "invalidLaps": len(laps) - len(clean_laps),
+                "practiceFlaggedLaps": sum(1 for lap in laps if lap.game_invalid and not lap.invalid),
+                "validPct": valid_pct,
+                "scoredPct": scored_pct,
+                "raceTimeMs": total_ms,
+                "raceTime": self._format_duration_ms(total_ms),
+                "bestLap": self._race_best_lap_summary(best_lap, reference),
+                "averageLapTimeMs": avg_lap_ms,
+                "averageLapTime": self._format_ms(avg_lap_ms) if avg_lap_ms is not None else "--",
+                "averageDeltaToBestMs": avg_delta_to_best,
+                "averageDeltaToReferenceMs": avg_delta_to_reference,
+                "consistencyMs": stdev_ms,
+                "consistency": f"{stdev_ms / 1000:.2f}s stdev" if stdev_ms is not None else "--",
+                "volatilityMs": volatility_ms,
+                "volatility": f"{volatility_ms / 1000:.2f}s lap-to-lap" if volatility_ms is not None else "--",
+                "longestCleanStreak": self._longest_clean_streak(laps),
+                "longestScoredStreak": longest_scored_streak,
+                "trendMs": trend_ms,
+                "trend": self._race_trend_label(trend_ms),
+            },
+            "powerRanking": {
+                "score": score,
+                "label": label,
+                "confidence": confidence,
+                "explanation": self._power_explanation(score, factors, len(scored_laps)),
+            },
+            "factors": factors,
+            "phaseBreakdown": phases,
+            "sectorTrend": self._race_sector_trend(scored_laps, reference),
+            "standoutLaps": self._race_standout_laps(scored_laps, rows, reference),
+            "riskRegister": risk_register,
+            "recommendations": recommendations,
+            "lapTable": rows,
+        }
+
+    def _race_lap_rows(
+        self,
+        laps: list[CompletedLap],
+        reference: ReferenceProfile | None,
+    ) -> list[dict[str, Any]]:
+        clean_laps = [lap for lap in laps if not lap.invalid]
+        best_lap = min(clean_laps, key=lambda lap: lap.lap_time_ms, default=None)
+        rows: list[dict[str, Any]] = []
+        previous_clean: CompletedLap | None = None
+        for lap in laps:
+            overview = self._lap_overview(lap)
+            notes = self._lap_overview_notes(lap)
+            exclusion_reason = self._race_lap_exclusion_reason(lap)
+            delta_to_best = lap.lap_time_ms - best_lap.lap_time_ms if best_lap is not None else None
+            delta_to_previous = (
+                lap.lap_time_ms - previous_clean.lap_time_ms
+                if previous_clean is not None and not lap.invalid
+                else None
+            )
+            row = {
+                "lapNum": lap.lap_num,
+                "lapTimeMs": lap.lap_time_ms,
+                "lapTime": self._format_ms(lap.lap_time_ms),
+                "status": "Invalid" if lap.invalid else "Practice flag" if lap.game_invalid else "Clean",
+                "rankingEligible": exclusion_reason is None,
+                "exclusionReason": exclusion_reason,
+                "deltaToBestMs": delta_to_best,
+                "deltaToReferenceMs": self._lap_reference_delta(lap, reference),
+                "deltaToPreviousCleanMs": delta_to_previous,
+                "sector1": self._format_ms(lap.sector1_time_ms) if lap.sector1_time_ms else "--",
+                "sector2": self._format_ms(lap.sector2_time_ms) if lap.sector2_time_ms else "--",
+                "sector3": self._format_ms(lap.sector3_time_ms) if lap.sector3_time_ms else "--",
+                "controlScore": overview.get("controlScore"),
+                "avgSpeedKmh": overview.get("avgSpeedKmh"),
+                "topSpeedKmh": overview.get("topSpeedKmh"),
+                "fullThrottlePct": overview.get("fullThrottlePct"),
+                "brakingPct": overview.get("brakingPct"),
+                "coastPct": overview.get("coastPct"),
+                "overlapPct": overview.get("brakeThrottleOverlapPct"),
+                "steeringThrottlePct": overview.get("steeringThrottlePct"),
+                "highSlipPct": overview.get("highSlipPct"),
+                "ersUsedKj": self._lap_ers_used_kj(lap),
+                "fuelKg": round(lap.fuel_kg, 2) if lap.fuel_kg is not None else None,
+                "fuelRemainingLaps": round(lap.fuel_remaining_laps, 2)
+                if lap.fuel_remaining_laps is not None
+                else None,
+                "tyreCompound": self._tyre_label(lap.visual_tyre_compound, lap.actual_tyre_compound),
+                "pitLap": lap.pit_lap,
+                "safetyCarLap": lap.safety_car_lap,
+                "nonGreenFlagLap": lap.non_green_flag_lap,
+                "note": exclusion_reason or (notes[0] if notes else ""),
+            }
+            rows.append(row)
+            if not lap.invalid:
+                previous_clean = lap
+        self._mark_non_representative_pace_outliers(rows)
+        return rows
+
+    def _race_lap_exclusion_reason(self, lap: CompletedLap) -> str | None:
+        if lap.lap_num == 1:
+            return "Excluded from ranking: lap 1 race start."
+        if lap.pit_lap:
+            return "Excluded from ranking: pit lane lap."
+        if lap.safety_car_lap:
+            return "Excluded from ranking: safety car or VSC."
+        if lap.non_green_flag_lap:
+            return "Excluded from ranking: non-green FIA flag."
+        if lap.invalid:
+            return "Excluded from ranking: invalid lap."
+        if not lap.samples:
+            return "Excluded from ranking: no telemetry trace."
+        return None
+
+    def _mark_non_representative_pace_outliers(self, rows: list[dict[str, Any]]) -> None:
+        candidates = [
+            row for row in rows if row.get("rankingEligible") and isinstance(row.get("lapTimeMs"), int)
+        ]
+        if len(candidates) < 4:
+            return
+        median_ms = self._median(row["lapTimeMs"] for row in candidates)
+        slow_cutoff_ms = max(6_000.0, median_ms * 0.08)
+        fast_cutoff_ms = max(4_000.0, median_ms * 0.055)
+        for row in candidates:
+            lap_time_ms = row["lapTimeMs"]
+            if lap_time_ms - median_ms > slow_cutoff_ms:
+                row["rankingEligible"] = False
+                row["exclusionReason"] = "Excluded from ranking: non-representative slow lap."
+                row["note"] = row["exclusionReason"]
+            elif median_ms - lap_time_ms > fast_cutoff_ms:
+                row["rankingEligible"] = False
+                row["exclusionReason"] = "Excluded from ranking: non-representative fast outlier."
+                row["note"] = row["exclusionReason"]
+
+    def _race_power_factors(
+        self,
+        laps: list[CompletedLap],
+        rows: list[dict[str, Any]],
+        scored_laps: list[CompletedLap],
+        reference: ReferenceProfile | None,
+        avg_delta_to_best: int | None,
+        stdev_ms: int | None,
+        volatility_ms: int | None,
+        trend_ms: int | None,
+        longest_scored_streak: int,
+    ) -> list[dict[str, Any]]:
+        if not scored_laps:
+            return [
+                {
+                    "name": "Representative laps",
+                    "score": 0.0,
+                    "weight": 1.0,
+                    "detail": "No representative green-flag racing laps are available for a power ranking.",
+                    "evidence": ["Lap 1, pit laps, safety-car laps, non-green-flag laps, invalid laps, and telemetry gaps are excluded."],
+                }
+            ]
+
+        scored_rows = [row for row in rows if row.get("rankingEligible")]
+        penalty_rows = [row for row in rows if self._ranking_exclusion_counts_as_penalty(row)]
+        neutral_exclusions = [
+            row
+            for row in rows
+            if not row.get("rankingEligible") and not self._ranking_exclusion_counts_as_penalty(row)
+        ]
+
+        best_lap = min(scored_laps, key=lambda lap: lap.lap_time_ms)
+        best_delta_to_reference = best_lap.lap_time_ms - reference.lap_time_ms if reference is not None else 0
+        pace_score = self._clamp_score(
+            10.0
+            - max(0, best_delta_to_reference) / 1200
+            - (avg_delta_to_best or 0) / 1400
+        )
+
+        consistency_score = 7.5
+        if stdev_ms is not None:
+            consistency_score += 2.0
+            consistency_score -= max(0, stdev_ms - 850) / 900
+        if volatility_ms is not None:
+            consistency_score -= max(0, volatility_ms - 450) / 350
+        consistency_score = self._clamp_score(consistency_score)
+
+        control_values = [
+            float(row["controlScore"])
+            for row in scored_rows
+            if row.get("controlScore") is not None
+        ]
+        avg_control = self._avg(control_values) if control_values else 0.0
+        penalty_base = len(scored_rows) + len(penalty_rows)
+        penalty_ratio = len(penalty_rows) / penalty_base if penalty_base else 0.0
+        control_score = self._clamp_score(avg_control / 10 - penalty_ratio * 3.0)
+
+        high_slip = self._avg(
+            float(row["highSlipPct"] or 0)
+            for row in scored_rows
+            if row.get("highSlipPct") is not None
+        )
+        steering_throttle = self._avg(
+            float(row["steeringThrottlePct"] or 0) for row in scored_rows
+        )
+        overlap = self._avg(float(row["overlapPct"] or 0) for row in scored_rows)
+        trend_penalty = max(0, (trend_ms or 0) - 1500) / 800
+        tyre_energy_score = self._clamp_score(
+            10.0 - high_slip * 0.12 - steering_throttle * 0.08 - overlap * 0.10 - trend_penalty
+        )
+
+        representative_base = len(scored_rows) + len(penalty_rows)
+        valid_pct = len(scored_rows) / representative_base * 100 if representative_base else 100.0
+        streak_score = min(10.0, longest_scored_streak / max(1, representative_base) * 12.0)
+        trend_score = 8.0
+        if trend_ms is not None:
+            trend_score = 10.0 - max(0, trend_ms) / 1000 + max(0, -trend_ms) / 2500
+        execution_score = self._clamp_score((valid_pct / 10) * 0.48 + streak_score * 0.32 + trend_score * 0.20)
+
+        reference_detail = (
+            f"best lap {self._signed_delta(best_delta_to_reference)} vs {reference.name}"
+            if reference is not None
+            else "rated against your race best"
+        )
+        return [
+            {
+                "name": "Pace",
+                "score": pace_score,
+                "weight": 0.32,
+                "detail": f"{reference_detail}; average representative lap is {self._format_delta(avg_delta_to_best or 0)} off your race best.",
+                "evidence": [
+                    f"Best lap {best_lap.lap_num}: {self._format_ms(best_lap.lap_time_ms)}",
+                    f"Scored-lap average: {self._format_ms(round(self._avg(lap.lap_time_ms for lap in scored_laps)))}",
+                    f"{len(neutral_exclusions)} neutral laps ignored",
+                ],
+            },
+            {
+                "name": "Consistency",
+                "score": consistency_score,
+                "weight": 0.24,
+                "detail": "Rewards repeatable lap time without large lap-to-lap spikes.",
+                "evidence": [
+                    f"Stdev {stdev_ms / 1000:.2f}s" if stdev_ms is not None else "Need more clean laps",
+                    f"Volatility {volatility_ms / 1000:.2f}s" if volatility_ms is not None else "No lap-to-lap trend yet",
+                ],
+            },
+            {
+                "name": "Control",
+                "score": control_score,
+                "weight": 0.22,
+                "detail": "Combines input quality, invalid laps, overlap, and traction stability.",
+                "evidence": [
+                    f"Average control {avg_control:.0f}/100",
+                    f"{len(penalty_rows)} driver/error laps counted as penalties",
+                ],
+            },
+            {
+                "name": "Tyre and Energy",
+                "score": tyre_energy_score,
+                "weight": 0.12,
+                "detail": "Looks for slip, throttle-with-lock, pedal overlap, and late-run degradation.",
+                "evidence": [
+                    f"High-slip samples {high_slip:.1f}%",
+                    f"Throttle with steering {steering_throttle:.1f}%",
+                    f"Pedal overlap {overlap:.1f}%",
+                ],
+            },
+            {
+                "name": "Race Execution",
+                "score": execution_score,
+                "weight": 0.10,
+                "detail": "Scores representative green-flag streaks, finish trend, and avoidable lap exclusions.",
+                "evidence": [
+                    f"{valid_pct:.1f}% representative laps",
+                    f"Longest scored streak {longest_scored_streak}",
+                    self._race_trend_label(trend_ms),
+                ],
+            },
+        ]
+
+    @staticmethod
+    def _ranking_exclusion_counts_as_penalty(row: dict[str, Any]) -> bool:
+        reason = str(row.get("exclusionReason") or "")
+        if not reason:
+            return False
+        neutral_reasons = (
+            "lap 1 race start",
+            "pit lane lap",
+            "safety car",
+            "non-green FIA flag",
+        )
+        if any(text in reason for text in neutral_reasons):
+            return False
+        return True
+
+    def _race_phase_breakdown(
+        self,
+        clean_laps: list[CompletedLap],
+        reference: ReferenceProfile | None,
+    ) -> list[dict[str, Any]]:
+        if not clean_laps:
+            return []
+        if len(clean_laps) == 1:
+            phase_slices = [("Full run", clean_laps)]
+        elif len(clean_laps) == 2:
+            phase_slices = [("Opening", clean_laps[:1]), ("Closing", clean_laps[1:])]
+        else:
+            first_end = max(1, len(clean_laps) // 3)
+            second_end = max(first_end + 1, (len(clean_laps) * 2) // 3)
+            phase_slices = [
+                ("Opening", clean_laps[:first_end]),
+                ("Middle", clean_laps[first_end:second_end]),
+                ("Closing", clean_laps[second_end:]),
+            ]
+
+        phases: list[dict[str, Any]] = []
+        race_best = min(clean_laps, key=lambda lap: lap.lap_time_ms)
+        for name, laps in phase_slices:
+            if not laps:
+                continue
+            times = [lap.lap_time_ms for lap in laps]
+            avg_ms = round(self._avg(times))
+            best = min(laps, key=lambda lap: lap.lap_time_ms)
+            control_values = []
+            for lap in laps:
+                control_score = self._lap_overview(lap).get("controlScore")
+                if control_score is not None:
+                    control_values.append(control_score)
+            avg_control = round(self._avg(float(value) for value in control_values)) if control_values else None
+            delta_to_reference = avg_ms - reference.lap_time_ms if reference is not None else None
+            delta_to_race_best = avg_ms - race_best.lap_time_ms
+            phases.append(
+                {
+                    "name": name,
+                    "lapRange": self._lap_range_label(laps),
+                    "lapCount": len(laps),
+                    "averageLapTimeMs": avg_ms,
+                    "averageLapTime": self._format_ms(avg_ms),
+                    "bestLapNum": best.lap_num,
+                    "bestLapTime": self._format_ms(best.lap_time_ms),
+                    "deltaToReferenceMs": delta_to_reference,
+                    "deltaToRaceBestMs": delta_to_race_best,
+                    "averageControlScore": avg_control,
+                    "note": self._phase_note(name, delta_to_race_best, avg_control),
+                }
+            )
+        return phases
+
+    def _race_sector_trend(
+        self,
+        clean_laps: list[CompletedLap],
+        reference: ReferenceProfile | None,
+    ) -> list[dict[str, Any]]:
+        sectors = [
+            ("S1", "sector1_time_ms", reference.sector1_time_ms if reference is not None else None),
+            ("S2", "sector2_time_ms", reference.sector2_time_ms if reference is not None else None),
+            ("S3", "sector3_time_ms", reference.sector3_time_ms if reference is not None else None),
+        ]
+        result: list[dict[str, Any]] = []
+        for label, attr, reference_ms in sectors:
+            entries = [(lap, int(getattr(lap, attr))) for lap in clean_laps if int(getattr(lap, attr)) > 0]
+            if not entries:
+                continue
+            best_lap, best_ms = min(entries, key=lambda item: item[1])
+            values = [value for _, value in entries]
+            avg_ms = round(self._avg(values))
+            spread_ms = max(values) - min(values) if len(values) > 1 else 0
+            result.append(
+                {
+                    "sector": label,
+                    "bestLapNum": best_lap.lap_num,
+                    "bestMs": best_ms,
+                    "best": self._format_ms(best_ms),
+                    "averageMs": avg_ms,
+                    "average": self._format_ms(avg_ms),
+                    "spreadMs": spread_ms,
+                    "spread": self._format_delta(spread_ms),
+                    "deltaToReferenceMs": best_ms - reference_ms if reference_ms is not None else None,
+                }
+            )
+        return result
+
+    def _race_standout_laps(
+        self,
+        clean_laps: list[CompletedLap],
+        rows: list[dict[str, Any]],
+        reference: ReferenceProfile | None,
+    ) -> list[dict[str, Any]]:
+        if not clean_laps:
+            return []
+        by_lap = {row["lapNum"]: row for row in rows}
+        avg_time = self._avg(lap.lap_time_ms for lap in clean_laps)
+        best_lap = min(clean_laps, key=lambda lap: lap.lap_time_ms)
+        most_average = min(clean_laps, key=lambda lap: abs(lap.lap_time_ms - avg_time))
+        best_control_row = max(
+            (row for row in rows if row.get("rankingEligible") and row.get("controlScore") is not None),
+            key=lambda row: row["controlScore"],
+            default=None,
+        )
+        biggest_gain_row = min(
+            (row for row in rows if row.get("rankingEligible") and row.get("deltaToPreviousCleanMs") is not None),
+            key=lambda row: row["deltaToPreviousCleanMs"],
+            default=None,
+        )
+        biggest_drop_row = max(
+            (row for row in rows if row.get("rankingEligible") and row.get("deltaToPreviousCleanMs") is not None),
+            key=lambda row: row["deltaToPreviousCleanMs"],
+            default=None,
+        )
+
+        moments: list[dict[str, Any]] = [
+            {
+                "type": "best",
+                "title": "Best lap",
+                "lapNum": best_lap.lap_num,
+                "metric": self._format_ms(best_lap.lap_time_ms),
+                "detail": (
+                    f"{self._signed_delta(best_lap.lap_time_ms - reference.lap_time_ms)} vs {reference.name}."
+                    if reference is not None
+                    else "Fastest scored lap of the run."
+                ),
+                "tone": "gain",
+            },
+            {
+                "type": "benchmark",
+                "title": "Representative lap",
+                "lapNum": most_average.lap_num,
+                "metric": self._format_ms(most_average.lap_time_ms),
+                "detail": f"{self._signed_delta(int(most_average.lap_time_ms - avg_time))} from scored-lap average.",
+                "tone": "neutral",
+            },
+        ]
+        if best_control_row is not None:
+            moments.append(
+                {
+                    "type": "control",
+                    "title": "Cleanest inputs",
+                    "lapNum": best_control_row["lapNum"],
+                    "metric": f"{best_control_row['controlScore']}/100",
+                    "detail": by_lap[best_control_row["lapNum"]].get("note") or "Highest control score in the run.",
+                    "tone": "gain",
+                }
+            )
+        if biggest_gain_row is not None and biggest_gain_row["deltaToPreviousCleanMs"] < -100:
+            moments.append(
+                {
+                    "type": "gain",
+                    "title": "Biggest lap-to-lap gain",
+                    "lapNum": biggest_gain_row["lapNum"],
+                    "metric": self._signed_delta(biggest_gain_row["deltaToPreviousCleanMs"]),
+                    "detail": "Largest improvement against the previous clean lap.",
+                    "tone": "gain",
+                }
+            )
+        if biggest_drop_row is not None and biggest_drop_row["deltaToPreviousCleanMs"] > 600:
+            moments.append(
+                {
+                    "type": "drop",
+                    "title": "Largest fade",
+                    "lapNum": biggest_drop_row["lapNum"],
+                    "metric": self._signed_delta(biggest_drop_row["deltaToPreviousCleanMs"]),
+                    "detail": "Largest slowdown against the previous clean lap.",
+                    "tone": "loss",
+                }
+            )
+        return moments[:5]
+
+    def _race_risk_register(
+        self,
+        rows: list[dict[str, Any]],
+        scored_laps: list[CompletedLap],
+        stdev_ms: int | None,
+        volatility_ms: int | None,
+        trend_ms: int | None,
+    ) -> list[dict[str, Any]]:
+        reviewable = [row for row in rows if row.get("rankingEligible")]
+        if not reviewable:
+            return [
+                {
+                    "title": "No representative baseline",
+                    "severity": "high",
+                    "detail": "No completed lap qualifies for green-flag power ranking.",
+                    "action": "Finish at least one clean, non-pit, green-flag lap before judging race pace.",
+                }
+            ]
+
+        risks: list[dict[str, Any]] = []
+        penalty_rows = [row for row in rows if self._ranking_exclusion_counts_as_penalty(row)]
+        if penalty_rows:
+            risks.append(
+                {
+                    "title": "Track limits or invalidation",
+                    "severity": "high" if len(penalty_rows) / max(1, len(scored_laps) + len(penalty_rows)) >= 0.2 else "medium",
+                    "detail": f"{len(penalty_rows)} avoidable laps were excluded from the representative sample.",
+                    "action": "Trade a small entry margin for a fully classified stint.",
+                }
+            )
+        avg_overlap = self._avg(float(row["overlapPct"] or 0) for row in reviewable)
+        if avg_overlap >= 5.0:
+            risks.append(
+                {
+                    "title": "Pedal overlap",
+                    "severity": "medium",
+                    "detail": f"Brake/throttle overlap averages {avg_overlap:.1f}% across scored laps.",
+                    "action": "Separate brake release and throttle pickup before adding setup changes.",
+                }
+            )
+        high_slip_values = [
+            float(row["highSlipPct"] or 0) for row in reviewable if row.get("highSlipPct") is not None
+        ]
+        avg_high_slip = self._avg(high_slip_values)
+        if high_slip_values and avg_high_slip >= 7.0:
+            risks.append(
+                {
+                    "title": "Rear traction life",
+                    "severity": "medium",
+                    "detail": f"High-slip traction samples average {avg_high_slip:.1f}%.",
+                    "action": "Delay full throttle until steering lock is unwinding, especially late stint.",
+                }
+            )
+        if volatility_ms is not None and volatility_ms >= 1000:
+            risks.append(
+                {
+                    "title": "Lap-to-lap volatility",
+                    "severity": "medium",
+                    "detail": f"Scored laps move by {volatility_ms / 1000:.2f}s on average.",
+                    "action": "Pick one repeatable braking reference per heavy stop and defend it for three laps.",
+                }
+            )
+        if stdev_ms is not None and stdev_ms >= 1800:
+            risks.append(
+                {
+                    "title": "Stint spread",
+                    "severity": "low",
+                    "detail": f"Scored-lap standard deviation is {stdev_ms / 1000:.2f}s.",
+                    "action": "Review whether traffic, tyre state, or ERS use is creating the spread.",
+                }
+            )
+        if trend_ms is not None and trend_ms >= 1800:
+            risks.append(
+                {
+                    "title": "Closing-stint fade",
+                    "severity": "medium",
+                    "detail": f"Closing phase is {self._format_delta(trend_ms)} slower than opening phase.",
+                    "action": "Protect rear traction and avoid battery spend before compromised exits.",
+                }
+            )
+        if not risks:
+            risks.append(
+                {
+                    "title": "No major race risk",
+                    "severity": "ok",
+                    "detail": "The run is clean enough that gains should come from targeted corner work.",
+                    "action": "Use the lap review view on the slowest representative lap.",
+                }
+            )
+        return risks[:5]
+
+    def _race_recommendations(
+        self,
+        factors: list[dict[str, Any]],
+        risks: list[dict[str, Any]],
+        phases: list[dict[str, Any]],
+        reference: ReferenceProfile | None,
+    ) -> list[str]:
+        if not factors:
+            return ["Complete clean laps to unlock a race plan."]
+        weakest = min(factors, key=lambda factor: float(factor["score"]))
+        recommendations: list[str] = []
+        if weakest["name"] == "Pace":
+            if reference is not None:
+                recommendations.append(f"Use the lap review map against {reference.name} and fix the largest two loss zones first.")
+            else:
+                recommendations.append("Set a clean personal best early, then judge race pace against that stable reference.")
+        elif weakest["name"] == "Consistency":
+            recommendations.append("Run three laps with the same braking markers before changing ERS or setup targets.")
+        elif weakest["name"] == "Control":
+            recommendations.append("Prioritize classified laps: leave margin on entry, then build rotation and exit speed gradually.")
+        elif weakest["name"] == "Tyre and Energy":
+            recommendations.append("Treat exits as tyre-management zones: steering unwind first, then full throttle and ERS.")
+        else:
+            recommendations.append("Stabilize the stint structure before chasing single-lap pace.")
+
+        for risk in risks:
+            if risk["severity"] in {"high", "medium"} and risk["action"] not in recommendations:
+                recommendations.append(risk["action"])
+            if len(recommendations) >= 4:
+                break
+        if phases:
+            slowest_phase = max(phases, key=lambda phase: phase["deltaToRaceBestMs"])
+            recommendations.append(
+                f"Audit the {slowest_phase['name'].lower()} phase laps {slowest_phase['lapRange']}; average pace there is {self._format_delta(slowest_phase['deltaToRaceBestMs'])} off the race-best lap."
+            )
+        return recommendations[:5]
+
+    def _race_best_lap_summary(
+        self,
+        lap: CompletedLap | None,
+        reference: ReferenceProfile | None,
+    ) -> dict[str, Any] | None:
+        if lap is None:
+            return None
+        return {
+            "lapNum": lap.lap_num,
+            "lapTimeMs": lap.lap_time_ms,
+            "lapTime": self._format_ms(lap.lap_time_ms),
+            "deltaToReferenceMs": lap.lap_time_ms - reference.lap_time_ms if reference is not None else None,
+        }
+
+    @staticmethod
+    def _weighted_power_score(factors: list[dict[str, Any]]) -> float | None:
+        if not factors:
+            return None
+        total_weight = sum(float(factor.get("weight", 0.0)) for factor in factors)
+        if total_weight <= 0:
+            return None
+        score = sum(float(factor["score"]) * float(factor.get("weight", 0.0)) for factor in factors) / total_weight
+        return round(max(0.0, min(10.0, score)), 1)
+
+    @staticmethod
+    def _power_label(score: float | None) -> str:
+        if score is None:
+            return "No rating"
+        if score >= 9.0:
+            return "Elite race drive"
+        if score >= 8.0:
+            return "Front-running form"
+        if score >= 7.0:
+            return "Strong points finish"
+        if score >= 6.0:
+            return "Solid but exposed"
+        if score >= 5.0:
+            return "Mixed execution"
+        return "Needs reset"
+
+    @staticmethod
+    def _power_confidence(clean_lap_count: int) -> str:
+        if clean_lap_count >= 10:
+            return "Full-race confidence"
+        if clean_lap_count >= 5:
+            return "Stint confidence"
+        if clean_lap_count >= 2:
+            return "Provisional"
+        if clean_lap_count == 1:
+            return "Single-lap sample"
+        return "No clean sample"
+
+    @staticmethod
+    def _power_explanation(score: float | None, factors: list[dict[str, Any]], clean_lap_count: int) -> str:
+        if score is None or not factors:
+            return "Complete laps to build a race power ranking."
+        strongest = max(factors, key=lambda factor: float(factor["score"]))
+        weakest = min(factors, key=lambda factor: float(factor["score"]))
+        sample_note = "Rating is provisional until the run has at least five clean laps. " if clean_lap_count < 5 else ""
+        return (
+            f"{sample_note}Strongest area: {strongest['name']} ({strongest['score']}/10). "
+            f"Main limiter: {weakest['name']} ({weakest['score']}/10)."
+        )
+
+    @staticmethod
+    def _clamp_score(value: float) -> float:
+        return round(max(0.0, min(10.0, value)), 1)
+
+    @staticmethod
+    def _stddev(values: list[int]) -> float:
+        if len(values) < 2:
+            return 0.0
+        mean = sum(values) / len(values)
+        return math.sqrt(sum((value - mean) ** 2 for value in values) / len(values))
+
+    @staticmethod
+    def _lap_time_volatility(clean_laps: list[CompletedLap]) -> int | None:
+        if len(clean_laps) < 2:
+            return None
+        deltas = [
+            abs(current.lap_time_ms - previous.lap_time_ms)
+            for previous, current in zip(clean_laps, clean_laps[1:])
+            if current.lap_num - previous.lap_num <= 2
+        ]
+        if not deltas:
+            deltas = [
+                abs(current.lap_time_ms - previous.lap_time_ms)
+                for previous, current in zip(clean_laps, clean_laps[1:])
+            ]
+        return round(sum(deltas) / len(deltas)) if deltas else None
+
+    @staticmethod
+    def _longest_clean_streak(laps: list[CompletedLap]) -> int:
+        longest = 0
+        current = 0
+        for lap in laps:
+            if lap.invalid:
+                current = 0
+            else:
+                current += 1
+                longest = max(longest, current)
+        return longest
+
+    @staticmethod
+    def _longest_scored_streak(rows: list[dict[str, Any]]) -> int:
+        longest = 0
+        current = 0
+        for row in rows:
+            if row.get("rankingEligible"):
+                current += 1
+                longest = max(longest, current)
+            else:
+                current = 0
+        return longest
+
+    @staticmethod
+    def _lap_range_label(laps: list[CompletedLap]) -> str:
+        if not laps:
+            return "--"
+        if len(laps) == 1:
+            return str(laps[0].lap_num)
+        return f"{laps[0].lap_num}-{laps[-1].lap_num}"
+
+    @staticmethod
+    def _phase_note(name: str, delta_to_race_best: int, avg_control: int | None) -> str:
+        control = f" Control {avg_control}/100." if avg_control is not None else ""
+        if delta_to_race_best <= 400:
+            return f"{name} phase is close to race-best pace.{control}"
+        if delta_to_race_best <= 1200:
+            return f"{name} phase is usable but leaves repeatability time.{control}"
+        return f"{name} phase is the main pace-loss window.{control}"
+
+    def _race_trend_label(self, trend_ms: int | None) -> str:
+        if trend_ms is None:
+            return "--"
+        if trend_ms < -250:
+            return f"{self._format_delta(abs(trend_ms))} faster at the end"
+        if trend_ms > 250:
+            return f"{self._format_delta(trend_ms)} slower at the end"
+        return "Stable finish"
+
+    @classmethod
+    def _format_duration_ms(cls, milliseconds: int) -> str:
+        hours, remainder = divmod(milliseconds, 3_600_000)
+        minutes, remainder = divmod(remainder, 60_000)
+        seconds, ms = divmod(remainder, 1000)
+        if hours:
+            return f"{hours}:{minutes:02d}:{seconds:02d}.{ms:03d}"
+        return f"{minutes}:{seconds:02d}.{ms:03d}"
 
     @staticmethod
     def _lap_reference_delta(lap: CompletedLap, reference: ReferenceProfile | None) -> int | None:

@@ -151,6 +151,99 @@ class LapCoachTests(unittest.TestCase):
         self.assertEqual(summary["overview"]["topSpeedKmh"], 220)
         self.assertEqual(summary["overview"]["sampleCount"], 2)
 
+    def test_snapshot_includes_full_race_review_power_ranking(self) -> None:
+        coach = LapCoach(sample_buckets=30)
+        laps = [
+            CompletedLap(1, 91_000, 30_000, 30_200, False, self._piecewise_samples([30_000, 30_200, 30_800])),
+            CompletedLap(2, 90_200, 29_700, 30_000, False, self._piecewise_samples([29_700, 30_000, 30_500])),
+            CompletedLap(3, 90_600, 29_900, 30_100, False, self._piecewise_samples([29_900, 30_100, 30_600])),
+            CompletedLap(4, 92_500, 30_800, 30_900, True, self._piecewise_samples([30_800, 30_900, 30_800])),
+            CompletedLap(5, 90_100, 29_600, 30_000, False, self._piecewise_samples([29_600, 30_000, 30_500])),
+        ]
+        coach.completed_laps = laps
+        coach.clean_laps = [lap for lap in laps if not lap.invalid]
+        coach.best_lap = laps[-1]
+
+        review = coach.snapshot()["raceReview"]
+
+        self.assertEqual(review["summary"]["totalLaps"], 5)
+        self.assertEqual(review["summary"]["cleanLaps"], 4)
+        self.assertEqual(review["summary"]["scoredLaps"], 3)
+        self.assertEqual(review["summary"]["invalidLaps"], 1)
+        self.assertEqual(review["summary"]["bestLap"]["lapNum"], 5)
+        self.assertEqual(len(review["lapTable"]), 5)
+        self.assertGreaterEqual(review["powerRanking"]["score"], 0)
+        self.assertLessEqual(review["powerRanking"]["score"], 10)
+        self.assertIn("Pace", {factor["name"] for factor in review["factors"]})
+        self.assertTrue(review["phaseBreakdown"])
+        self.assertEqual([sector["sector"] for sector in review["sectorTrend"]], ["S1", "S2", "S3"])
+
+    def test_power_ranking_excludes_neutralized_and_non_representative_laps(self) -> None:
+        coach = LapCoach(sample_buckets=30)
+        laps = [
+            CompletedLap(1, 122_000, 40_000, 41_000, False, self._piecewise_samples([40_000, 41_000, 41_000])),
+            CompletedLap(2, 90_000, 30_000, 30_000, False, self._piecewise_samples([30_000, 30_000, 30_000])),
+            CompletedLap(
+                3,
+                155_000,
+                52_000,
+                52_000,
+                False,
+                self._piecewise_samples([52_000, 52_000, 51_000]),
+                pit_statuses=(1,),
+            ),
+            CompletedLap(
+                4,
+                142_000,
+                47_000,
+                47_000,
+                False,
+                self._piecewise_samples([47_000, 47_000, 48_000]),
+                safety_car_statuses=(1,),
+            ),
+            CompletedLap(
+                5,
+                91_000,
+                30_200,
+                30_300,
+                False,
+                self._piecewise_samples([30_200, 30_300, 30_500]),
+                fia_flag_statuses=(3,),
+            ),
+            CompletedLap(6, 90_400, 30_100, 30_100, False, self._piecewise_samples([30_100, 30_100, 30_200])),
+            CompletedLap(7, 90_300, 30_100, 30_100, False, self._piecewise_samples([30_100, 30_100, 30_100])),
+            CompletedLap(8, 111_000, 37_000, 37_000, False, self._piecewise_samples([37_000, 37_000, 37_000])),
+            CompletedLap(9, 89_900, 29_900, 30_000, True, self._piecewise_samples([29_900, 30_000, 30_000])),
+            CompletedLap(10, 90_100, 30_000, 30_000, False, []),
+        ]
+        coach.completed_laps = laps
+        coach.clean_laps = [lap for lap in laps if not lap.invalid]
+        coach.best_lap = laps[1]
+
+        review = coach.snapshot()["raceReview"]
+        table = {row["lapNum"]: row for row in review["lapTable"]}
+
+        self.assertEqual(review["summary"]["scoredLaps"], 3)
+        self.assertEqual(review["summary"]["bestLap"]["lapNum"], 2)
+        self.assertEqual(review["summary"]["averageLapTimeMs"], 90_233)
+        self.assertFalse(table[1]["rankingEligible"])
+        self.assertIn("lap 1", table[1]["exclusionReason"])
+        self.assertFalse(table[3]["rankingEligible"])
+        self.assertIn("pit lane", table[3]["exclusionReason"])
+        self.assertFalse(table[4]["rankingEligible"])
+        self.assertIn("safety car", table[4]["exclusionReason"])
+        self.assertFalse(table[5]["rankingEligible"])
+        self.assertIn("non-green", table[5]["exclusionReason"])
+        self.assertFalse(table[8]["rankingEligible"])
+        self.assertIn("non-representative slow", table[8]["exclusionReason"])
+        self.assertFalse(table[9]["rankingEligible"])
+        self.assertIn("invalid", table[9]["exclusionReason"])
+        self.assertFalse(table[10]["rankingEligible"])
+        self.assertIn("no telemetry", table[10]["exclusionReason"])
+        self.assertTrue(table[2]["rankingEligible"])
+        self.assertTrue(table[6]["rankingEligible"])
+        self.assertTrue(table[7]["rankingEligible"])
+
     def test_lap_overview_flags_input_overlap(self) -> None:
         coach = LapCoach(sample_buckets=10)
         lap = CompletedLap(

@@ -7,6 +7,7 @@ F1Coach is a small Python app that listens to live UDP telemetry from F1 24 and 
 - Listens for UDP telemetry on port `20777`.
 - Decodes F1 24 `2024` packet headers plus session, lap, car telemetry, car status, motion, and motion-ex packets.
 - Runs a local review dashboard focused on completed laps, delta maps, input traces, priority fixes, and packet status.
+- Adds a separate Race Overview dashboard for full-race tracking, stint phase review, sector trends, race risks, and a power ranking out of 10.
 - Plots a 2D track map from live motion packet world positions.
 - Highlights areas of the track where the last lap lost time.
 - Calculates a simple theoretical best from your three best clean sectors.
@@ -76,6 +77,8 @@ The practical options are:
 
 - `Pause Capture` stops recording/analyzing incoming UDP packets without clearing the current session. Existing laps, the track map, the improvement target, and analysis stay visible.
 - `Resume Capture` continues recording new packets into the same session.
+- `Lap Review` / `Race Overview` switches between single-lap coaching and the full-race review area. Race Overview keeps the race log, phase breakdown, execution risks, sector trends, next-run plan, and F1-style power ranking separate from the map/trace workspace.
+- The power ranking uses only representative green-flag racing laps. Lap 1, pit lane laps, safety car/VSC laps, non-green-flag laps, invalid laps, missing-telemetry laps, and obvious non-representative pace outliers stay visible in the race log but do not distort the score.
 - `Qualifying` / `Race Pace` changes the coaching goal. Qualifying advice is more aggressive about peak lap time and ERS spend; race-pace advice favors repeatable braking, tyre life, and battery use for attack/defense.
 - `New Session` clears the current session when you switch tracks or want a fresh reference.
 

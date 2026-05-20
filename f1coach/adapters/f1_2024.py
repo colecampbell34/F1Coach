@@ -43,6 +43,7 @@ class F124Adapter:
 
     SESSION_PREFIX_FORMAT: ClassVar[str] = "<BbbBHBbBHH"
     SESSION_PREFIX_SIZE: ClassVar[int] = struct.calcsize(SESSION_PREFIX_FORMAT)
+    SESSION_SAFETY_CAR_OFFSET: ClassVar[int] = SESSION_PREFIX_SIZE + 6 + (21 * 5)
 
     MOTION_EX_FORMAT: ClassVar[str] = "<52f"
     MOTION_EX_SIZE: ClassVar[int] = struct.calcsize(MOTION_EX_FORMAT)
@@ -96,6 +97,10 @@ class F124Adapter:
             _session_time_left,
             _session_duration,
         ) = values
+        safety_car_status = 0
+        safety_car_offset = self.HEADER_SIZE + self.SESSION_SAFETY_CAR_OFFSET
+        if len(packet) > safety_car_offset:
+            safety_car_status = struct.unpack_from("<B", packet, safety_car_offset)[0]
         return SessionInfo(
             header=header,
             track_length_m=track_length_m,
@@ -105,6 +110,7 @@ class F124Adapter:
             weather=weather,
             air_temperature_c=air_temperature_c,
             track_temperature_c=track_temperature_c,
+            safety_car_status=safety_car_status,
         )
 
     def _decode_lap_data(self, packet: bytes, header: PacketHeader) -> LapSnapshot:

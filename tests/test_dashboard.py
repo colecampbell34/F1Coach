@@ -101,9 +101,11 @@ class TelemetryRuntimeTests(unittest.TestCase):
 
         self.assertIn("F1Coach Garage Review", index)
         self.assertIn("Delta Circuit", index)
+        self.assertIn("Race Overview", index)
         self.assertIn("diagnostics", index)
         self.assertIn(".appShell", css)
         self.assertIn("function renderReviewHero", js)
+        self.assertIn("function renderRaceReview", js)
         self.assertIn("function renderDiagnostics", js)
 
 

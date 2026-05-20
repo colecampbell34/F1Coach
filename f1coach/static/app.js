@@ -4,11 +4,20 @@ const traceCanvas = document.getElementById("trace");
 const pauseButton = document.getElementById("pauseButton");
 const newSessionButton = document.getElementById("newSessionButton");
 const goalButtons = Array.from(document.querySelectorAll("[data-goal]"));
+const viewButtons = Array.from(document.querySelectorAll("[data-view]"));
+const dashboardViews = {
+  lap: document.getElementById("lapView"),
+  race: document.getElementById("raceView"),
+};
 const appError = document.getElementById("appError");
 let selectedLapNum = null;
 let selectedInsightIndex = null;
+let selectedDashboardView = "lap";
 
 function initControls() {
+  viewButtons.forEach(button => {
+    button.addEventListener("click", () => switchDashboardView(button.dataset.view || "lap"));
+  });
   goalButtons.forEach(button => {
     button.addEventListener("click", () => withUiError(async () => {
       await sendControl("set-goal", { goal: button.dataset.goal });
@@ -25,9 +34,12 @@ function initControls() {
     if (!confirmed) return;
     selectedLapNum = null;
     selectedInsightIndex = null;
+    selectedDashboardView = "lap";
+    switchDashboardView(selectedDashboardView);
     await sendControl("new-session");
     await refresh();
   }));
+  switchDashboardView(selectedDashboardView);
 }
 
 async function sendControl(action, payload = {}) {
@@ -58,8 +70,18 @@ async function refresh() {
   renderSetupInsights(state.setupInsights || []);
   renderLaps(state.completedLaps || []);
   renderFeed(state.notices || []);
+  renderRaceReview(state.raceReview || {});
   renderMap(state, selectedLap, selectedInsights);
   renderTrace(state, selectedLap, selectedInsights);
+}
+
+function switchDashboardView(view) {
+  selectedDashboardView = dashboardViews[view] ? view : "lap";
+  for (const [name, element] of Object.entries(dashboardViews)) {
+    if (!element) continue;
+    element.hidden = name !== selectedDashboardView;
+  }
+  viewButtons.forEach(button => button.classList.toggle("active", button.dataset.view === selectedDashboardView));
 }
 
 function renderSession(state) {
@@ -278,6 +300,178 @@ function renderFeed(notices) {
     const div = document.createElement("div");
     div.textContent = notice;
     feed.appendChild(div);
+  }
+}
+
+function renderRaceReview(review) {
+  const summary = review.summary || {};
+  const ranking = review.powerRanking || {};
+  setText("racePowerScore", ranking.score === null || ranking.score === undefined ? "--" : Number(ranking.score).toFixed(1));
+  setText("racePowerLabel", ranking.label || "No rating");
+  setText("racePowerMeta", [ranking.confidence, ranking.explanation].filter(Boolean).join(" · "));
+  setText("raceTotalTime", summary.raceTime || "--");
+  setText("raceClassified", summary.totalLaps ? `${summary.scoredLaps || 0}/${summary.totalLaps} scored` : "--");
+  setText("raceBestLap", summary.bestLap ? `L${summary.bestLap.lapNum} ${summary.bestLap.lapTime}` : "--");
+  setText("raceAverageLap", summary.averageLapTime || "--");
+  setText("raceConsistency", summary.consistency || "--");
+  setText("raceTrend", summary.trend || "--");
+
+  renderPowerFactors(review.factors || []);
+  renderRacePhases(review.phaseBreakdown || []);
+  renderRaceSectors(review.sectorTrend || []);
+  renderRaceRisks(review.riskRegister || []);
+  renderRaceStandouts(review.standoutLaps || []);
+  renderRacePlan(review.recommendations || []);
+  renderRaceLapTable(review.lapTable || []);
+}
+
+function renderPowerFactors(factors) {
+  const target = document.getElementById("powerFactors");
+  target.innerHTML = "";
+  if (!factors.length) {
+    target.appendChild(empty("Race ranking factors appear after completed laps."));
+    return;
+  }
+  for (const factor of factors) {
+    const card = document.createElement("div");
+    card.className = "factorCard";
+    const top = document.createElement("div");
+    top.className = "factorTop";
+    appendText(top, "strong", factor.name || "Factor");
+    appendText(top, "span", `${fmtScore(factor.score)}/10`);
+    const bar = document.createElement("div");
+    bar.className = "scoreBar";
+    const fill = document.createElement("i");
+    fill.style.width = `${Math.max(0, Math.min(100, Number(factor.score || 0) * 10))}%`;
+    bar.appendChild(fill);
+    appendText(card, "p", factor.detail || "");
+    const evidence = document.createElement("div");
+    evidence.className = "factorEvidence";
+    (factor.evidence || []).forEach(item => appendText(evidence, "span", item));
+    card.prepend(top, bar);
+    if (evidence.childElementCount) card.appendChild(evidence);
+    target.appendChild(card);
+  }
+}
+
+function renderRacePhases(phases) {
+  const target = document.getElementById("racePhases");
+  target.innerHTML = "";
+  if (!phases.length) {
+    target.appendChild(empty("Opening, middle, and closing phase splits appear after clean laps."));
+    return;
+  }
+  for (const phase of phases) {
+    const card = document.createElement("div");
+    card.className = "phaseCard";
+    const header = document.createElement("div");
+    appendText(header, "strong", phase.name || "Phase");
+    appendText(header, "span", `Laps ${phase.lapRange || "--"}`);
+    const metrics = document.createElement("div");
+    metrics.className = "miniMetrics";
+    metrics.append(metricPill("Avg", phase.averageLapTime || "--"));
+    metrics.append(metricPill("Best", phase.bestLapTime ? `L${phase.bestLapNum} ${phase.bestLapTime}` : "--"));
+    metrics.append(metricPill("Vs best", fmtMs(phase.deltaToRaceBestMs)));
+    metrics.append(metricPill("Control", phase.averageControlScore === null || phase.averageControlScore === undefined ? "--" : `${phase.averageControlScore}/100`));
+    appendText(card, "p", phase.note || "");
+    card.prepend(header, metrics);
+    target.appendChild(card);
+  }
+}
+
+function renderRaceSectors(sectors) {
+  const target = document.getElementById("raceSectors");
+  target.innerHTML = "";
+  if (!sectors.length) {
+    target.appendChild(empty("Sector trends need clean laps with sector timing."));
+    return;
+  }
+  for (const sector of sectors) {
+    const row = document.createElement("div");
+    row.className = "sectorRow";
+    appendText(row, "strong", sector.sector || "Sector");
+    appendText(row, "span", `Best L${sector.bestLapNum} ${sector.best || "--"}`);
+    appendText(row, "span", `Avg ${sector.average || "--"}`);
+    appendText(row, "span", `Spread ${sector.spread || "--"}`);
+    appendText(row, "span", `Δ Ref ${fmtMs(sector.deltaToReferenceMs)}`);
+    target.appendChild(row);
+  }
+}
+
+function renderRaceRisks(risks) {
+  const target = document.getElementById("raceRisks");
+  target.innerHTML = "";
+  if (!risks.length) {
+    target.appendChild(empty("Race risks appear once the stint has enough telemetry."));
+    return;
+  }
+  for (const risk of risks) {
+    const card = document.createElement("div");
+    card.className = `riskCard ${risk.severity || "low"}`;
+    appendText(card, "strong", risk.title || "Risk");
+    appendText(card, "span", risk.detail || "");
+    appendText(card, "small", risk.action || "");
+    target.appendChild(card);
+  }
+}
+
+function renderRaceStandouts(items) {
+  const target = document.getElementById("raceStandouts");
+  target.innerHTML = "";
+  if (!items.length) {
+    target.appendChild(empty("Best, cleanest, and most representative laps appear here."));
+    return;
+  }
+  for (const item of items) {
+    const card = document.createElement("div");
+    card.className = `standoutCard ${item.tone || "neutral"}`;
+    appendText(card, "strong", `${item.title || "Moment"} · L${item.lapNum}`);
+    appendText(card, "span", item.metric || "--", "metric");
+    appendText(card, "small", item.detail || "");
+    target.appendChild(card);
+  }
+}
+
+function renderRacePlan(items) {
+  const target = document.getElementById("racePlan");
+  target.innerHTML = "";
+  if (!items.length) {
+    target.appendChild(empty("A next-run plan appears after the race review has enough data."));
+    return;
+  }
+  items.forEach((item, index) => {
+    const row = document.createElement("div");
+    row.className = "planStep";
+    appendText(row, "strong", String(index + 1));
+    appendText(row, "span", item);
+    target.appendChild(row);
+  });
+}
+
+function renderRaceLapTable(rows) {
+  const target = document.getElementById("raceLapTable");
+  target.innerHTML = "";
+  if (!rows.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 8;
+    cell.appendChild(empty("Full race lap data appears after completed laps."));
+    row.appendChild(cell);
+    target.appendChild(row);
+    return;
+  }
+  for (const lap of rows) {
+    const row = document.createElement("tr");
+    row.className = lap.status === "Invalid" ? "invalid" : lap.rankingEligible === false ? "excluded" : "";
+    appendCell(row, `L${lap.lapNum}`);
+    appendCell(row, lap.lapTime || "--");
+    appendCell(row, fmtMs(lap.deltaToBestMs));
+    appendCell(row, fmtMs(lap.deltaToReferenceMs));
+    appendCell(row, `${lap.sector1 || "--"} / ${lap.sector2 || "--"} / ${lap.sector3 || "--"}`);
+    appendCell(row, lap.controlScore === null || lap.controlScore === undefined ? "--" : `${lap.controlScore}/100`);
+    appendCell(row, raceTyreFuel(lap));
+    appendCell(row, lap.note || lap.status || "--");
+    target.appendChild(row);
   }
 }
 
@@ -575,6 +769,20 @@ function empty(text) {
   return div;
 }
 
+function metricPill(label, value) {
+  const pill = document.createElement("div");
+  pill.className = "metricPill";
+  appendText(pill, "span", label);
+  appendText(pill, "strong", value);
+  return pill;
+}
+
+function appendCell(row, value) {
+  const cell = document.createElement("td");
+  cell.textContent = value === null || value === undefined || value === "" ? "--" : value;
+  row.appendChild(cell);
+}
+
 function setText(id, value) {
   document.getElementById(id).textContent = value === null || value === undefined ? "--" : value;
 }
@@ -611,6 +819,20 @@ function fmtKmh(value) {
 function fmtPct(value) {
   if (value === null || value === undefined) return "--";
   return `${Number(value).toFixed(1)}%`;
+}
+
+function fmtScore(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
+  return Number(value).toFixed(1);
+}
+
+function raceTyreFuel(lap) {
+  const parts = [];
+  if (lap.tyreCompound) parts.push(lap.tyreCompound);
+  if (lap.fuelKg !== null && lap.fuelKg !== undefined) parts.push(`${Number(lap.fuelKg).toFixed(1)}kg`);
+  else if (lap.fuelRemainingLaps !== null && lap.fuelRemainingLaps !== undefined) parts.push(`${Number(lap.fuelRemainingLaps).toFixed(1)} laps`);
+  if (lap.ersUsedKj !== null && lap.ersUsedKj !== undefined) parts.push(fmtErs(lap.ersUsedKj));
+  return parts.join(" · ") || lap.status || "--";
 }
 
 function titleCase(text) {
