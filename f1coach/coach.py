@@ -52,6 +52,7 @@ class CompletedLap:
     fuel_remaining_laps: float | None = None
     actual_tyre_compound: int | None = None
     visual_tyre_compound: int | None = None
+    race_position: int | None = None
     pit_statuses: tuple[int, ...] = ()
     safety_car_statuses: tuple[int, ...] = ()
     fia_flag_statuses: tuple[int, ...] = ()
@@ -332,6 +333,7 @@ class LapCoach:
             fuel_remaining_laps=self.latest_status.fuel_remaining_laps if self.latest_status is not None else None,
             actual_tyre_compound=self.latest_status.actual_tyre_compound if self.latest_status is not None else None,
             visual_tyre_compound=self.latest_status.visual_tyre_compound if self.latest_status is not None else None,
+            race_position=new_lap_snapshot.car_position if new_lap_snapshot.car_position > 0 else None,
             pit_statuses=tuple(sorted(self.active_pit_statuses)),
             safety_car_statuses=tuple(sorted(self.active_safety_car_statuses)),
             fia_flag_statuses=tuple(sorted(self.active_fia_flag_statuses)),
@@ -1372,6 +1374,7 @@ class LapCoach:
             "actualTyreCompound": lap.actual_tyre_compound,
             "visualTyreCompound": lap.visual_tyre_compound,
             "tyreCompound": self._tyre_label(lap.visual_tyre_compound, lap.actual_tyre_compound),
+            "position": lap.race_position,
             "pitLap": lap.pit_lap,
             "pitStatuses": list(lap.pit_statuses),
             "safetyCarLap": lap.safety_car_lap,
@@ -1419,6 +1422,8 @@ class LapCoach:
                 "standoutLaps": [],
                 "riskRegister": [],
                 "recommendations": [],
+                "trends": self._empty_race_trends(),
+                "funStats": [],
                 "lapTable": [],
             }
 
@@ -1466,6 +1471,8 @@ class LapCoach:
         confidence = self._power_confidence(len(scored_laps))
         risk_register = self._race_risk_register(rows, scored_laps, stdev_ms, volatility_ms, trend_ms)
         recommendations = self._race_recommendations(factors, risk_register, phases, reference)
+        trends = self._race_trends(rows)
+        fun_stats = self._race_fun_stats(rows, phases, longest_scored_streak)
 
         return {
             "status": "ready" if scored_laps else "needs-representative-lap",
@@ -1506,6 +1513,8 @@ class LapCoach:
             "standoutLaps": self._race_standout_laps(scored_laps, rows, reference),
             "riskRegister": risk_register,
             "recommendations": recommendations,
+            "trends": trends,
+            "funStats": fun_stats,
             "lapTable": rows,
         }
 
@@ -1556,6 +1565,7 @@ class LapCoach:
                 if lap.fuel_remaining_laps is not None
                 else None,
                 "tyreCompound": self._tyre_label(lap.visual_tyre_compound, lap.actual_tyre_compound),
+                "position": lap.race_position,
                 "pitLap": lap.pit_lap,
                 "safetyCarLap": lap.safety_car_lap,
                 "nonGreenFlagLap": lap.non_green_flag_lap,
@@ -1566,6 +1576,172 @@ class LapCoach:
                 previous_clean = lap
         self._mark_non_representative_pace_outliers(rows)
         return rows
+
+    @staticmethod
+    def _empty_race_trends() -> dict[str, list[dict[str, Any]]]:
+        return {
+            "pace": [],
+            "position": [],
+            "control": [],
+            "energy": [],
+        }
+
+    def _race_trends(self, rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        trends = self._empty_race_trends()
+        for row in rows:
+            lap_num = row["lapNum"]
+            trends["pace"].append(
+                {
+                    "lapNum": lap_num,
+                    "lapTimeMs": row.get("lapTimeMs"),
+                    "deltaToBestMs": row.get("deltaToBestMs"),
+                    "deltaToPreviousCleanMs": row.get("deltaToPreviousCleanMs"),
+                    "rankingEligible": row.get("rankingEligible"),
+                    "status": row.get("status"),
+                }
+            )
+            if row.get("position") is not None:
+                trends["position"].append(
+                    {
+                        "lapNum": lap_num,
+                        "position": row.get("position"),
+                        "rankingEligible": row.get("rankingEligible"),
+                    }
+                )
+            trends["control"].append(
+                {
+                    "lapNum": lap_num,
+                    "controlScore": row.get("controlScore"),
+                    "highSlipPct": row.get("highSlipPct"),
+                    "overlapPct": row.get("overlapPct"),
+                    "steeringThrottlePct": row.get("steeringThrottlePct"),
+                }
+            )
+            trends["energy"].append(
+                {
+                    "lapNum": lap_num,
+                    "ersUsedKj": row.get("ersUsedKj"),
+                    "fuelKg": row.get("fuelKg"),
+                    "fuelRemainingLaps": row.get("fuelRemainingLaps"),
+                    "tyreCompound": row.get("tyreCompound"),
+                }
+            )
+        return trends
+
+    def _race_fun_stats(
+        self,
+        rows: list[dict[str, Any]],
+        phases: list[dict[str, Any]],
+        longest_scored_streak: int,
+    ) -> list[dict[str, Any]]:
+        stats: list[dict[str, Any]] = []
+        position_rows = [row for row in rows if row.get("position") is not None]
+        if position_rows:
+            start_position = int(position_rows[0]["position"])
+            finish_position = int(position_rows[-1]["position"])
+            best_position = min(int(row["position"]) for row in position_rows)
+            worst_position = max(int(row["position"]) for row in position_rows)
+            net_gain = start_position - finish_position
+            stats.append(
+                {
+                    "label": "Positions",
+                    "value": self._position_delta_label(net_gain),
+                    "detail": f"Started P{start_position}, finished P{finish_position}; best running spot P{best_position}.",
+                    "tone": "gain" if net_gain > 0 else "loss" if net_gain < 0 else "neutral",
+                }
+            )
+            stats.append(
+                {
+                    "label": "Position Range",
+                    "value": f"P{best_position}-P{worst_position}",
+                    "detail": f"Covered {worst_position - best_position + 1} track positions during the run.",
+                    "tone": "neutral",
+                }
+            )
+            biggest_position_gain = self._biggest_position_gain(position_rows)
+            if biggest_position_gain is not None:
+                stats.append(biggest_position_gain)
+
+        ers_rows = [
+            row for row in rows if row.get("ersUsedKj") is not None and isinstance(row.get("ersUsedKj"), (int, float))
+        ]
+        if ers_rows:
+            max_ers = max(ers_rows, key=lambda row: float(row["ersUsedKj"]))
+            avg_ers = self._avg(float(row["ersUsedKj"]) for row in ers_rows)
+            stats.append(
+                {
+                    "label": "Biggest ERS Lap",
+                    "value": f"L{max_ers['lapNum']} {self._format_kj(float(max_ers['ersUsedKj']))}",
+                    "detail": f"Average spend was {self._format_kj(avg_ers)} per measured lap.",
+                    "tone": "gain",
+                }
+            )
+
+        fuel_rows = [
+            row for row in rows if row.get("fuelKg") is not None and isinstance(row.get("fuelKg"), (int, float))
+        ]
+        if len(fuel_rows) >= 2:
+            fuel_burn = float(fuel_rows[0]["fuelKg"]) - float(fuel_rows[-1]["fuelKg"])
+            per_lap = fuel_burn / max(1, len(fuel_rows) - 1)
+            stats.append(
+                {
+                    "label": "Fuel Burn",
+                    "value": f"{fuel_burn:.1f} kg",
+                    "detail": f"About {per_lap:.2f} kg per completed lap with fuel telemetry.",
+                    "tone": "neutral",
+                }
+            )
+
+        if longest_scored_streak:
+            stats.append(
+                {
+                    "label": "Clean Streak",
+                    "value": f"{longest_scored_streak} laps",
+                    "detail": "Longest run of representative green-flag laps used by the ranking model.",
+                    "tone": "gain" if longest_scored_streak >= 5 else "neutral",
+                }
+            )
+
+        if phases:
+            fastest_phase = min(phases, key=lambda phase: phase["averageLapTimeMs"])
+            slowest_phase = max(phases, key=lambda phase: phase["averageLapTimeMs"])
+            stats.append(
+                {
+                    "label": "Fastest Phase",
+                    "value": fastest_phase["name"],
+                    "detail": f"{fastest_phase['averageLapTime']} average across laps {fastest_phase['lapRange']}.",
+                    "tone": "gain",
+                }
+            )
+            if slowest_phase["name"] != fastest_phase["name"]:
+                stats.append(
+                    {
+                        "label": "Slowest Phase",
+                        "value": slowest_phase["name"],
+                        "detail": f"{slowest_phase['averageLapTime']} average across laps {slowest_phase['lapRange']}.",
+                        "tone": "loss",
+                    }
+                )
+
+        return stats[:8]
+
+    def _biggest_position_gain(self, position_rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+        best: tuple[int, dict[str, Any], dict[str, Any]] | None = None
+        for previous, current in zip(position_rows, position_rows[1:]):
+            gain = int(previous["position"]) - int(current["position"])
+            if gain <= 0:
+                continue
+            if best is None or gain > best[0]:
+                best = (gain, previous, current)
+        if best is None:
+            return None
+        gain, previous, current = best
+        return {
+            "label": "Best Position Jump",
+            "value": f"+{gain}",
+            "detail": f"Lap {previous['lapNum']} to {current['lapNum']}: P{previous['position']} to P{current['position']}.",
+            "tone": "gain",
+        }
 
     def _race_lap_exclusion_reason(self, lap: CompletedLap) -> str | None:
         if lap.lap_num == 1:
@@ -2680,6 +2856,20 @@ class LapCoach:
     @staticmethod
     def _format_delta(milliseconds: int) -> str:
         return f"{milliseconds / 1000:.3f}s"
+
+    @staticmethod
+    def _format_kj(kj: float) -> str:
+        if abs(kj) >= 1000:
+            return f"{kj / 1000:.1f} MJ"
+        return f"{kj:.0f} kJ"
+
+    @staticmethod
+    def _position_delta_label(delta: int) -> str:
+        if delta > 0:
+            return f"+{delta}"
+        if delta < 0:
+            return str(delta)
+        return "0"
 
     @classmethod
     def _signed_delta(cls, milliseconds: int) -> str:

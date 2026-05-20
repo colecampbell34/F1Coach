@@ -570,11 +570,11 @@ canvas {
 }
 .raceGrid {
   min-height: 0;
-  min-height: 780px;
+  min-height: 1320px;
   height: calc(100vh - 72px);
   display: grid;
   grid-template-columns: minmax(300px, 1fr) minmax(260px, .9fr) minmax(260px, .9fr) minmax(280px, .95fr);
-  grid-template-rows: 172px minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: 172px minmax(260px, .9fr) minmax(260px, 1fr) minmax(260px, 1fr) minmax(340px, 1.15fr);
   gap: 8px;
   padding: 8px;
 }
@@ -650,14 +650,24 @@ canvas {
   font-size: 16px;
   line-height: 1.08;
 }
-.powerPanel { grid-column: 1; grid-row: 2; }
-.phasePanel { grid-column: 2; grid-row: 2; }
-.riskPanel { grid-column: 3; grid-row: 2; }
-.standoutPanel { grid-column: 4; grid-row: 2; }
-.raceTablePanel { grid-column: 1 / span 2; grid-row: 3; }
+.racePacePanel { grid-column: 1 / span 2; grid-row: 2; }
+.racePositionPanel { grid-column: 3 / span 2; grid-row: 2; }
+.powerPanel { grid-column: 1; grid-row: 3; }
+.phasePanel { grid-column: 2; grid-row: 3; }
 .sectorPanel { grid-column: 3; grid-row: 3; }
-.racePlanPanel { grid-column: 4; grid-row: 3; }
-.powerFactors, .racePhases, .raceSectors, .raceRisks, .raceStandouts, .racePlan {
+.funPanel { grid-column: 4; grid-row: 3; }
+.riskPanel { grid-column: 1; grid-row: 4; }
+.standoutPanel { grid-column: 2; grid-row: 4; }
+.racePlanPanel { grid-column: 3 / span 2; grid-row: 4; }
+.raceTablePanel { grid-column: 1 / -1; grid-row: 5; }
+.chartPanel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.chartPanel canvas {
+  min-height: 210px;
+}
+.powerFactors, .racePhases, .raceSectors, .raceRisks, .raceStandouts, .racePlan, .raceFunStats {
   min-height: 0;
   height: calc(100% - 42px);
   overflow: auto;
@@ -666,7 +676,7 @@ canvas {
   align-content: start;
   gap: 6px;
 }
-.factorCard, .phaseCard, .riskCard, .standoutCard, .planStep, .sectorRow {
+.factorCard, .phaseCard, .riskCard, .standoutCard, .planStep, .sectorRow, .funStat {
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -784,6 +794,33 @@ canvas {
   color: var(--yellow);
   font-weight: 900;
 }
+.funStat {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  padding: 8px;
+  border-left: 4px solid var(--yellow);
+}
+.funStat.gain { border-left-color: var(--green); }
+.funStat.loss { border-left-color: var(--red); }
+.funStat span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.funStat strong {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1.05;
+}
+.funStat small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.28;
+}
 .planStep {
   grid-template-columns: 26px minmax(0, 1fr);
   align-items: start;
@@ -821,7 +858,7 @@ canvas {
 }
 .raceTable {
   width: 100%;
-  min-width: 840px;
+  min-width: 900px;
   border-collapse: collapse;
   font-size: 12px;
 }
@@ -873,7 +910,7 @@ canvas {
     grid-column: 1;
     grid-row: auto;
   }
-  .raceHero, .powerPanel, .phasePanel, .sectorPanel, .riskPanel, .standoutPanel, .racePlanPanel, .raceTablePanel {
+  .raceHero, .racePacePanel, .racePositionPanel, .powerPanel, .phasePanel, .sectorPanel, .funPanel, .riskPanel, .standoutPanel, .racePlanPanel, .raceTablePanel {
     grid-column: 1;
     grid-row: auto;
   }
@@ -892,9 +929,12 @@ canvas {
   .reviewProfile {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  .lapList, .insights, .feed, .powerFactors, .racePhases, .raceSectors, .raceRisks, .raceStandouts, .racePlan {
+  .lapList, .insights, .feed, .powerFactors, .racePhases, .raceSectors, .raceRisks, .raceStandouts, .racePlan, .raceFunStats {
     height: auto;
     max-height: 340px;
+  }
+  .chartPanel {
+    min-height: 280px;
   }
   .raceTableWrap {
     max-height: 420px;

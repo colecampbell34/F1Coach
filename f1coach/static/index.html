@@ -182,6 +182,26 @@
         </div>
       </section>
 
+      <section class="racePacePanel panel chartPanel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Race Trend</span>
+            <h2>Pace Over The Run</h2>
+          </div>
+        </div>
+        <canvas id="racePaceChart" width="980" height="300"></canvas>
+      </section>
+
+      <section class="racePositionPanel panel chartPanel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Track Position</span>
+            <h2>Position History</h2>
+          </div>
+        </div>
+        <canvas id="racePositionChart" width="980" height="300"></canvas>
+      </section>
+
       <section class="powerPanel panel">
         <div class="panelHeader">
           <div>
@@ -210,6 +230,16 @@
           </div>
         </div>
         <div id="raceSectors" class="raceSectors"></div>
+      </section>
+
+      <section class="funPanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Race Extras</span>
+            <h2>Fun Stats</h2>
+          </div>
+        </div>
+        <div id="raceFunStats" class="raceFunStats"></div>
       </section>
 
       <section class="riskPanel panel">
@@ -254,6 +284,7 @@
             <thead>
               <tr>
                 <th>Lap</th>
+                <th>Pos</th>
                 <th>Time</th>
                 <th>Δ Best</th>
                 <th>Δ Ref</th>

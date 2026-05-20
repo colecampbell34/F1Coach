@@ -122,6 +122,8 @@ class TelemetryRuntimeTests(unittest.TestCase):
         self.assertIn("Full Race Log", index)
         self.assertIn("Quali Pace", index)
         self.assertIn("Race Overview", index)
+        self.assertIn("Position History", index)
+        self.assertIn("Fun Stats", index)
         self.assertNotIn("Setup Signals", index)
         self.assertNotIn("data-view", index)
         self.assertIn("diagnostics", index)

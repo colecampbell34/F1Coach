@@ -177,6 +177,9 @@ class LapCoachTests(unittest.TestCase):
             CompletedLap(4, 92_500, 30_800, 30_900, True, self._piecewise_samples([30_800, 30_900, 30_800])),
             CompletedLap(5, 90_100, 29_600, 30_000, False, self._piecewise_samples([29_600, 30_000, 30_500])),
         ]
+        for lap, position, fuel_kg in zip(laps, [8, 7, 6, 6, 5], [34.0, 32.6, 31.3, 30.0, 28.8]):
+            lap.race_position = position
+            lap.fuel_kg = fuel_kg
         coach.completed_laps = laps
         coach.clean_laps = [lap for lap in laps if not lap.invalid]
         coach.best_lap = laps[-1]
@@ -194,6 +197,10 @@ class LapCoachTests(unittest.TestCase):
         self.assertIn("Pace", {factor["name"] for factor in review["factors"]})
         self.assertTrue(review["phaseBreakdown"])
         self.assertEqual([sector["sector"] for sector in review["sectorTrend"]], ["S1", "S2", "S3"])
+        self.assertEqual([point["position"] for point in review["trends"]["position"]], [8, 7, 6, 6, 5])
+        self.assertTrue(review["trends"]["pace"])
+        self.assertTrue(any(stat["label"] == "Positions" for stat in review["funStats"]))
+        self.assertTrue(any(stat["label"] == "Fuel Burn" for stat in review["funStats"]))
 
     def test_power_ranking_excludes_neutralized_and_non_representative_laps(self) -> None:
         coach = LapCoach(sample_buckets=30)
@@ -421,6 +428,7 @@ class LapCoachTests(unittest.TestCase):
         self.assertEqual(summary["fuelKg"], 13.4)
         self.assertEqual(summary["fuelRemainingLaps"], 5.6)
         self.assertEqual(summary["tyreCompound"], "Soft")
+        self.assertEqual(summary["position"], 1)
 
     def test_identifies_ers_underuse_on_corner_exit(self) -> None:
         coach = LapCoach(sample_buckets=30)

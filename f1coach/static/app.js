@@ -71,7 +71,7 @@ async function refresh() {
 
 function renderActiveDashboard(state) {
   if (selectedDashboardView === "race") {
-    renderRaceReview(state.raceReview || {});
+  renderRaceReview(state.raceReview || {});
     return;
   }
   const selectedLap = selectedLapFromState(state);
@@ -345,12 +345,133 @@ function renderRaceReview(review) {
   setText("raceTrend", summary.trend || "--");
 
   renderPowerFactors(review.factors || []);
+  renderRaceCharts(review.trends || {});
+  renderRaceFunStats(review.funStats || []);
   renderRacePhases(review.phaseBreakdown || []);
   renderRaceSectors(review.sectorTrend || []);
   renderRaceRisks(review.riskRegister || []);
   renderRaceStandouts(review.standoutLaps || []);
   renderRacePlan(review.recommendations || []);
   renderRaceLapTable(review.lapTable || []);
+}
+
+function renderRaceCharts(trends) {
+  renderRacePaceTrend(trends.pace || []);
+  renderRacePositionTrend(trends.position || []);
+}
+
+function renderRacePaceTrend(points) {
+  const canvas = document.getElementById("racePaceChart");
+  if (!canvas) return;
+  const { ctx, w, h } = canvasContext(canvas);
+  clearCanvas(ctx, w, h);
+  const series = (points || []).filter(point => Number.isFinite(Number(point.deltaToBestMs)));
+  if (!series.length) {
+    centerText(ctx, w, h, "Pace trend appears after representative laps");
+    return;
+  }
+  const plot = chartPlot(w, h);
+  drawChartGrid(ctx, w, h, plot);
+  const maxDelta = Math.max(0.25, ...series.map(point => Math.max(0, Number(point.deltaToBestMs) / 1000)));
+  const lapMin = Math.min(...series.map(point => Number(point.lapNum)));
+  const lapMax = Math.max(...series.map(point => Number(point.lapNum)));
+  const xFor = point => plot.left + lapProgress(point.lapNum, lapMin, lapMax) * plot.width;
+  const yFor = point => plot.top + Math.max(0, Number(point.deltaToBestMs) / 1000) / maxDelta * plot.height;
+  drawTrendLine(ctx, series, xFor, yFor, "#ffd166", 2.5);
+  for (const point of series) {
+    drawTrendDot(ctx, xFor(point), yFor(point), point.rankingEligible ? "#3ff09a" : "#81788e", point.rankingEligible ? 3.5 : 2.5);
+  }
+  drawChartCaption(ctx, plot, `0 to +${maxDelta.toFixed(1)}s vs race best`, `L${lapMin} to L${lapMax}`);
+}
+
+function renderRacePositionTrend(points) {
+  const canvas = document.getElementById("racePositionChart");
+  if (!canvas) return;
+  const { ctx, w, h } = canvasContext(canvas);
+  clearCanvas(ctx, w, h);
+  const series = (points || []).filter(point => Number.isFinite(Number(point.position)));
+  if (!series.length) {
+    centerText(ctx, w, h, "Position history appears when F1 24 reports race position");
+    return;
+  }
+  const plot = chartPlot(w, h);
+  drawChartGrid(ctx, w, h, plot);
+  const bestPos = Math.min(...series.map(point => Number(point.position)));
+  const worstPos = Math.max(...series.map(point => Number(point.position)));
+  const posSpan = Math.max(1, worstPos - bestPos);
+  const lapMin = Math.min(...series.map(point => Number(point.lapNum)));
+  const lapMax = Math.max(...series.map(point => Number(point.lapNum)));
+  const xFor = point => plot.left + lapProgress(point.lapNum, lapMin, lapMax) * plot.width;
+  const yFor = point => plot.top + (Number(point.position) - bestPos) / posSpan * plot.height;
+  drawTrendLine(ctx, series, xFor, yFor, "#45d6ff", 2.5);
+  for (const point of series) {
+    drawTrendDot(ctx, xFor(point), yFor(point), point.rankingEligible ? "#45d6ff" : "#81788e", point.rankingEligible ? 3.5 : 2.5);
+  }
+  drawChartCaption(ctx, plot, `Best P${bestPos} · worst P${worstPos}`, `L${lapMin} to L${lapMax}`);
+}
+
+function drawTrendLine(ctx, series, xFor, yFor, color, width) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  series.forEach((point, index) => {
+    const x = xFor(point);
+    const y = yFor(point);
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+}
+
+function drawTrendDot(ctx, x, y, color, radius) {
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawChartGrid(ctx, w, h, plot) {
+  ctx.strokeStyle = "rgba(255,255,255,.10)";
+  ctx.lineWidth = 1;
+  for (const pct of [0, 0.25, 0.5, 0.75, 1]) {
+    const y = plot.top + pct * plot.height;
+    ctx.beginPath();
+    ctx.moveTo(plot.left, y);
+    ctx.lineTo(w - plot.right, y);
+    ctx.stroke();
+  }
+  for (const pct of [0, 0.25, 0.5, 0.75, 1]) {
+    const x = plot.left + pct * plot.width;
+    ctx.beginPath();
+    ctx.moveTo(x, plot.top);
+    ctx.lineTo(x, h - plot.bottom);
+    ctx.stroke();
+  }
+}
+
+function drawChartCaption(ctx, plot, leftText, rightText) {
+  ctx.fillStyle = "#b4aebd";
+  ctx.font = "11px system-ui";
+  ctx.textAlign = "left";
+  ctx.fillText(leftText, plot.left, 14);
+  ctx.textAlign = "right";
+  ctx.fillText(rightText, plot.left + plot.width, plot.top + plot.height + 22);
+  ctx.textAlign = "start";
+}
+
+function chartPlot(w, h) {
+  const left = 42;
+  const right = 24;
+  const top = 22;
+  const bottom = 32;
+  return { left, right, top, bottom, width: w - left - right, height: h - top - bottom };
+}
+
+function lapProgress(lapNum, lapMin, lapMax) {
+  const span = Math.max(1, Number(lapMax) - Number(lapMin));
+  return (Number(lapNum) - Number(lapMin)) / span;
 }
 
 function renderPowerFactors(factors) {
@@ -378,6 +499,24 @@ function renderPowerFactors(factors) {
     (factor.evidence || []).forEach(item => appendText(evidence, "span", item));
     card.prepend(top, bar);
     if (evidence.childElementCount) card.appendChild(evidence);
+    target.appendChild(card);
+  }
+}
+
+function renderRaceFunStats(items) {
+  const target = document.getElementById("raceFunStats");
+  if (!target) return;
+  target.innerHTML = "";
+  if (!items.length) {
+    target.appendChild(empty("Position changes, ERS spend, fuel burn, and stint trivia appear after a race."));
+    return;
+  }
+  for (const item of items) {
+    const card = document.createElement("div");
+    card.className = `funStat ${item.tone || "neutral"}`;
+    appendText(card, "span", item.label || "Stat");
+    appendText(card, "strong", item.value || "--");
+    appendText(card, "small", item.detail || "");
     target.appendChild(card);
   }
 }
@@ -482,7 +621,7 @@ function renderRaceLapTable(rows) {
   if (!rows.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 8;
+    cell.colSpan = 9;
     cell.appendChild(empty("Full race lap data appears after completed laps."));
     row.appendChild(cell);
     target.appendChild(row);
@@ -492,6 +631,7 @@ function renderRaceLapTable(rows) {
     const row = document.createElement("tr");
     row.className = lap.status === "Invalid" ? "invalid" : lap.rankingEligible === false ? "excluded" : "";
     appendCell(row, `L${lap.lapNum}`);
+    appendCell(row, lap.position ? `P${lap.position}` : "--");
     appendCell(row, lap.lapTime || "--");
     appendCell(row, fmtMs(lap.deltaToBestMs));
     appendCell(row, fmtMs(lap.deltaToReferenceMs));
