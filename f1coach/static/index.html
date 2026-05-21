@@ -60,7 +60,6 @@
             <strong id="reviewStatus">--</strong>
           </div>
         </div>
-        <div id="reviewProfile" class="reviewProfile"></div>
       </section>
 
       <section class="lapShelf panel">
@@ -147,38 +146,41 @@
       <section class="raceHero">
         <div class="raceScoreCard">
           <span class="eyebrow">Power Ranking</span>
-          <div class="scoreDial">
+          <div id="racePowerRing" class="scoreDial scoreRing">
             <strong id="racePowerScore">--</strong>
             <span>/10</span>
           </div>
           <h2 id="racePowerLabel">No rating</h2>
           <p id="racePowerMeta">Complete laps to build a race power ranking.</p>
         </div>
-        <div class="raceSummary">
-          <div>
-            <span>Race Time</span>
-            <strong id="raceTotalTime">--</strong>
+        <div class="raceHeroBody">
+          <div class="raceSummary">
+            <div>
+              <span>Race Time</span>
+              <strong id="raceTotalTime">--</strong>
+            </div>
+            <div>
+              <span>Ranked Laps</span>
+              <strong id="raceClassified">--</strong>
+            </div>
+            <div>
+              <span>Best Lap</span>
+              <strong id="raceBestLap">--</strong>
+            </div>
+            <div>
+              <span>Avg Lap</span>
+              <strong id="raceAverageLap">--</strong>
+            </div>
+            <div>
+              <span>Consistency</span>
+              <strong id="raceConsistency">--</strong>
+            </div>
+            <div>
+              <span>Finish Trend</span>
+              <strong id="raceTrend">--</strong>
+            </div>
           </div>
-          <div>
-            <span>Ranked Laps</span>
-            <strong id="raceClassified">--</strong>
-          </div>
-          <div>
-            <span>Best Lap</span>
-            <strong id="raceBestLap">--</strong>
-          </div>
-          <div>
-            <span>Avg Lap</span>
-            <strong id="raceAverageLap">--</strong>
-          </div>
-          <div>
-            <span>Consistency</span>
-            <strong id="raceConsistency">--</strong>
-          </div>
-          <div>
-            <span>Finish Trend</span>
-            <strong id="raceTrend">--</strong>
-          </div>
+          <div id="raceStatusStrip" class="raceStatusStrip"></div>
         </div>
       </section>
 
@@ -212,31 +214,11 @@
         <div id="powerFactors" class="powerFactors"></div>
       </section>
 
-      <section class="phasePanel panel">
-        <div class="panelHeader">
-          <div>
-            <span class="eyebrow">Stint Shape</span>
-            <h2>Race Phases</h2>
-          </div>
-        </div>
-        <div id="racePhases" class="racePhases"></div>
-      </section>
-
-      <section class="sectorPanel panel">
-        <div class="panelHeader">
-          <div>
-            <span class="eyebrow">Sector Command</span>
-            <h2>Where Pace Lived</h2>
-          </div>
-        </div>
-        <div id="raceSectors" class="raceSectors"></div>
-      </section>
-
       <section class="funPanel panel">
         <div class="panelHeader">
           <div>
-            <span class="eyebrow">Race Extras</span>
-            <h2>Fun Stats</h2>
+            <span class="eyebrow">Race Signals</span>
+            <h2>Run Signals</h2>
           </div>
         </div>
         <div id="raceFunStats" class="raceFunStats"></div>
@@ -270,6 +252,16 @@
           </div>
         </div>
         <div id="racePlan" class="racePlan"></div>
+      </section>
+
+      <section class="raceRibbonPanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Race Pulse</span>
+            <h2>Lap Delta Ribbon</h2>
+          </div>
+        </div>
+        <div id="raceLapRibbon" class="raceLapRibbon"></div>
       </section>
 
       <section class="raceTablePanel panel">

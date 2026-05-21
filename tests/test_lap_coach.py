@@ -290,6 +290,29 @@ class LapCoachTests(unittest.TestCase):
         self.assertLess(summary["overview"]["controlScore"], 70)
         self.assertTrue(any("overlap" in note for note in summary["overviewNotes"]))
 
+    def test_lap_overview_penalizes_abrupt_inputs(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        lap = CompletedLap(
+            9,
+            91_500,
+            30_000,
+            31_000,
+            False,
+            [
+                self._sample(10_000, 0.10, 260, 1.00, 0.00, steer=0.00),
+                self._sample(14_000, 0.15, 210, 0.00, 0.82, steer=0.12),
+                self._sample(18_000, 0.20, 180, 0.00, 0.00, steer=0.48),
+                self._sample(22_000, 0.25, 220, 1.00, 0.00, steer=0.38),
+                self._sample(26_000, 0.30, 260, 1.00, 0.00, steer=0.00),
+            ],
+        )
+
+        summary = coach._lap_summary(lap)
+
+        self.assertLess(summary["overview"]["controlScore"], 85)
+        self.assertGreater(summary["overview"]["throttleSnapPct"], 0)
+        self.assertTrue(any("abrupt" in note for note in summary["overviewNotes"]))
+
     def test_uses_active_lap_sector_times_when_lap_rolls_over(self) -> None:
         coach = LapCoach(sample_buckets=10)
         coach.update(SessionInfo(self.header, 5000, 0, 10, 3, 0, 22, 30))
@@ -313,6 +336,48 @@ class LapCoachTests(unittest.TestCase):
         coach.update(self._lap(lap_num=2, current_ms=100, last_ms=91_000, distance=10))
 
         self.assertEqual([lap.lap_num for lap in coach.completed_laps], [1, 2])
+
+    def test_finished_result_status_completes_final_race_lap_without_rollover(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.update(SessionInfo(self.header, 5000, 0, 10, 2, 0, 22, 30))
+        coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
+
+        coach.update(self._lap(lap_num=1, current_ms=50_000, last_ms=0, distance=3000))
+        coach.update(self._lap(lap_num=2, current_ms=100, last_ms=90_000, distance=10))
+        coach.update(self._lap(lap_num=2, current_ms=45_000, last_ms=90_000, distance=2600, s1=29_000))
+        notices = coach.update(
+            self._lap(
+                lap_num=2,
+                current_ms=0,
+                last_ms=88_500,
+                distance=5000,
+                s1=29_000,
+                s2=29_500,
+                driver_status=0,
+                result_status=3,
+            )
+        )
+        coach.update(
+            self._lap(
+                lap_num=2,
+                current_ms=88_500,
+                last_ms=88_500,
+                distance=5000,
+                s1=29_000,
+                s2=29_500,
+                driver_status=0,
+                result_status=3,
+            )
+        )
+
+        self.assertEqual([lap.lap_num for lap in coach.completed_laps], [1, 2])
+        self.assertEqual(coach.completed_laps[-1].lap_time_ms, 88_500)
+        state = coach.snapshot()
+        self.assertTrue(state["session"]["raceFinished"])
+        self.assertTrue(state["raceReview"]["summary"]["raceComplete"])
+        self.assertEqual(state["raceReview"]["summary"]["totalLaps"], 2)
+        self.assertEqual(state["raceReview"]["summary"]["expectedLaps"], 2)
+        self.assertTrue(any("Race complete" in notice for notice in notices))
 
     def test_track_change_starts_new_session(self) -> None:
         coach = LapCoach(sample_buckets=10)
@@ -653,6 +718,7 @@ class LapCoachTests(unittest.TestCase):
         s1: int = 30_000,
         s2: int = 30_000,
         driver_status: int = 1,
+        result_status: int = 2,
     ) -> LapSnapshot:
         return LapSnapshot(
             header=self.header,
@@ -669,7 +735,7 @@ class LapCoachTests(unittest.TestCase):
             current_lap_invalid=invalid,
             pit_status=0,
             driver_status=driver_status,
-            result_status=2,
+            result_status=result_status,
             speed_trap_fastest_speed_kmh=0.0,
         )
 

@@ -71,7 +71,7 @@ async function refresh() {
 
 function renderActiveDashboard(state) {
   if (selectedDashboardView === "race") {
-  renderRaceReview(state.raceReview || {});
+    renderRaceReview(state.raceReview || {});
     return;
   }
   const selectedLap = selectedLapFromState(state);
@@ -153,6 +153,7 @@ function renderReviewHero(state, selectedLap, insights) {
     setText("reviewReference", bestDelta ? `${referenceLabel} (${bestDelta} vs PB)` : referenceLabel);
     setText("reviewStatus", "--");
     renderReviewProfile(null);
+    renderLapPulse(null);
     return;
   }
   const insight = (insights || [])[0];
@@ -170,29 +171,68 @@ function renderReviewHero(state, selectedLap, insights) {
   setText("reviewReference", bestDelta ? `${referenceLabel} (${bestDelta} vs PB)` : referenceLabel);
   setText("reviewStatus", lapStatus(selectedLap));
   renderReviewProfile(selectedLap);
+  renderLapPulse(selectedLap);
 }
 
 function renderReviewProfile(selectedLap) {
   const target = document.getElementById("reviewProfile");
+  if (!target) return;
   target.innerHTML = "";
   const overview = selectedLap && selectedLap.overview || {};
   if (!overview.sampleCount) return;
   const metrics = [
-    ["Avg speed", fmtKmh(overview.avgSpeedKmh)],
-    ["Top speed", fmtKmh(overview.topSpeedKmh)],
-    ["Full throttle", fmtPct(overview.fullThrottlePct)],
-    ["Braking", fmtPct(overview.brakingPct)],
-    ["Overlap", fmtPct(overview.brakeThrottleOverlapPct)],
-    ["Control", overview.controlScore === null || overview.controlScore === undefined ? "--" : `${overview.controlScore}/100`],
-    ["ERS used", fmtErs(selectedLap.ersUsedKj)],
+    { label: "Avg speed", value: fmtKmh(overview.avgSpeedKmh), pct: Number(overview.avgSpeedKmh || 0) / 330 * 100, tone: "cyan" },
+    { label: "Top speed", value: fmtKmh(overview.topSpeedKmh), pct: Number(overview.topSpeedKmh || 0) / 360 * 100, tone: "yellow" },
+    { label: "Full throttle", value: fmtPct(overview.fullThrottlePct), pct: overview.fullThrottlePct, tone: "green" },
+    { label: "Braking", value: fmtPct(overview.brakingPct), pct: overview.brakingPct, tone: "red" },
+    { label: "Overlap", value: fmtPct(overview.brakeThrottleOverlapPct), pct: overview.brakeThrottleOverlapPct, tone: Number(overview.brakeThrottleOverlapPct || 0) >= 6 ? "red" : "cyan" },
+    { label: "Control", value: overview.controlScore === null || overview.controlScore === undefined ? "--" : `${overview.controlScore}/100`, pct: overview.controlScore, tone: Number(overview.controlScore || 0) >= 82 ? "green" : Number(overview.controlScore || 0) >= 65 ? "yellow" : "red" },
+    { label: "ERS used", value: fmtErs(selectedLap.ersUsedKj), pct: selectedLap.ersUsedKj === null || selectedLap.ersUsedKj === undefined ? 0 : Number(selectedLap.ersUsedKj) / 4000 * 100, tone: "violet" },
   ];
-  for (const [label, value] of metrics) {
+  for (const metric of metrics) {
     const pill = document.createElement("div");
-    pill.className = "profilePill";
-    appendText(pill, "span", label);
-    appendText(pill, "strong", value);
+    pill.className = `profilePill ${metric.tone || ""}`;
+    pill.style.setProperty("--fill", `${clamp(Number(metric.pct || 0), 0, 100)}%`);
+    appendText(pill, "span", metric.label);
+    appendText(pill, "strong", metric.value);
+    pill.appendChild(document.createElement("i"));
     target.appendChild(pill);
   }
+}
+
+function renderLapPulse(selectedLap) {
+  const target = document.getElementById("lapPulseStrip");
+  if (!target) return;
+  target.innerHTML = "";
+  if (!selectedLap) {
+    target.appendChild(empty("Lap telemetry pulse appears after a completed lap."));
+    return;
+  }
+  const total = Number(selectedLap.lapTimeMs || 0);
+  const sectors = [
+    ["S1", selectedLap.sector1Ms],
+    ["S2", selectedLap.sector2Ms],
+    ["S3", selectedLap.sector3Ms],
+  ];
+  for (const [label, value] of sectors) {
+    const pct = total > 0 ? Number(value || 0) / total * 100 : 0;
+    target.appendChild(pulseTile(label, fmtSectorMs(value), pct, "neutral"));
+  }
+  const overview = selectedLap.overview || {};
+  const delta = Number(selectedLap.deltaToReferenceMs);
+  target.appendChild(pulseTile("Delta", fmtMs(selectedLap.deltaToReferenceMs), Number.isFinite(delta) ? Math.min(100, Math.abs(delta) / 3000 * 100) : 0, delta <= 0 ? "gain" : "loss"));
+  target.appendChild(pulseTile("Control", overview.controlScore === null || overview.controlScore === undefined ? "--" : `${overview.controlScore}/100`, overview.controlScore, Number(overview.controlScore || 0) >= 82 ? "gain" : Number(overview.controlScore || 0) >= 65 ? "neutral" : "loss"));
+  target.appendChild(pulseTile("Commit", fmtPct(overview.fullThrottlePct), overview.fullThrottlePct, "gain"));
+}
+
+function pulseTile(label, value, pct, tone) {
+  const tile = document.createElement("div");
+  tile.className = `pulseTile ${tone || "neutral"}`;
+  tile.style.setProperty("--fill", `${clamp(Number(pct || 0), 0, 100)}%`);
+  appendText(tile, "span", label);
+  appendText(tile, "strong", value);
+  tile.appendChild(document.createElement("i"));
+  return tile;
 }
 
 function renderPacketMix(state) {
@@ -334,6 +374,8 @@ function renderFeed(notices) {
 function renderRaceReview(review) {
   const summary = review.summary || {};
   const ranking = review.powerRanking || {};
+  const ring = document.getElementById("racePowerRing");
+  if (ring) ring.style.setProperty("--score", `${clamp(Number(ranking.score || 0) * 10, 0, 100)}%`);
   setText("racePowerScore", ranking.score === null || ranking.score === undefined ? "--" : Number(ranking.score).toFixed(1));
   setText("racePowerLabel", ranking.label || "No rating");
   setText("racePowerMeta", [ranking.confidence, ranking.explanation].filter(Boolean).join(" · "));
@@ -344,15 +386,40 @@ function renderRaceReview(review) {
   setText("raceConsistency", summary.consistency || "--");
   setText("raceTrend", summary.trend || "--");
 
+  renderRaceStatusStrip(review);
   renderPowerFactors(review.factors || []);
   renderRaceCharts(review.trends || {});
   renderRaceFunStats(review.funStats || []);
-  renderRacePhases(review.phaseBreakdown || []);
-  renderRaceSectors(review.sectorTrend || []);
   renderRaceRisks(review.riskRegister || []);
   renderRaceStandouts(review.standoutLaps || []);
   renderRacePlan(review.recommendations || []);
+  renderRaceLapRibbon(review.lapTable || [], summary);
   renderRaceLapTable(review.lapTable || []);
+}
+
+function renderRaceStatusStrip(review) {
+  const target = document.getElementById("raceStatusStrip");
+  if (!target) return;
+  target.innerHTML = "";
+  const summary = review.summary || {};
+  const ranking = review.powerRanking || {};
+  const expected = summary.expectedLaps || summary.totalLaps || null;
+  const completion = expected ? `${summary.totalLaps || 0}/${expected}` : `${summary.totalLaps || 0}`;
+  const status = summary.raceComplete ? "Checkered flag" : summary.lapsRemaining === 0 ? "Distance covered" : "In progress";
+  const scored = summary.scoredPct === undefined || summary.scoredPct === null ? "--" : `${Number(summary.scoredPct).toFixed(0)}%`;
+  target.appendChild(statusChip("Status", status, summary.raceComplete ? "gain" : "neutral"));
+  target.appendChild(statusChip("Distance", `${completion} laps`, summary.raceComplete ? "gain" : "cyan"));
+  target.appendChild(statusChip("Scored", scored, Number(summary.scoredPct || 0) >= 75 ? "gain" : "neutral"));
+  target.appendChild(statusChip("Pace", fmtMs(summary.averageDeltaToBestMs), "yellow"));
+  target.appendChild(statusChip("Rating", ranking.score === null || ranking.score === undefined ? "--" : `${Number(ranking.score).toFixed(1)}/10`, "violet"));
+}
+
+function statusChip(label, value, tone) {
+  const chip = document.createElement("div");
+  chip.className = `statusChip ${tone || "neutral"}`;
+  appendText(chip, "span", label);
+  appendText(chip, "strong", value || "--");
+  return chip;
 }
 
 function renderRaceCharts(trends) {
@@ -377,6 +444,7 @@ function renderRacePaceTrend(points) {
   const lapMax = Math.max(...series.map(point => Number(point.lapNum)));
   const xFor = point => plot.left + lapProgress(point.lapNum, lapMin, lapMax) * plot.width;
   const yFor = point => plot.top + Math.max(0, Number(point.deltaToBestMs) / 1000) / maxDelta * plot.height;
+  drawTrendArea(ctx, series, xFor, yFor, plot, "rgba(255,209,102,.14)");
   drawTrendLine(ctx, series, xFor, yFor, "#ffd166", 2.5);
   for (const point of series) {
     drawTrendDot(ctx, xFor(point), yFor(point), point.rankingEligible ? "#3ff09a" : "#81788e", point.rankingEligible ? 3.5 : 2.5);
@@ -403,11 +471,27 @@ function renderRacePositionTrend(points) {
   const lapMax = Math.max(...series.map(point => Number(point.lapNum)));
   const xFor = point => plot.left + lapProgress(point.lapNum, lapMin, lapMax) * plot.width;
   const yFor = point => plot.top + (Number(point.position) - bestPos) / posSpan * plot.height;
+  drawTrendArea(ctx, series, xFor, yFor, plot, "rgba(69,214,255,.12)");
   drawTrendLine(ctx, series, xFor, yFor, "#45d6ff", 2.5);
   for (const point of series) {
     drawTrendDot(ctx, xFor(point), yFor(point), point.rankingEligible ? "#45d6ff" : "#81788e", point.rankingEligible ? 3.5 : 2.5);
   }
   drawChartCaption(ctx, plot, `Best P${bestPos} · worst P${worstPos}`, `L${lapMin} to L${lapMax}`);
+}
+
+function drawTrendArea(ctx, series, xFor, yFor, plot, color) {
+  if (series.length < 2) return;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  series.forEach((point, index) => {
+    const x = xFor(point);
+    const y = yFor(point);
+    if (index === 0) ctx.moveTo(x, plot.top + plot.height);
+    ctx.lineTo(x, y);
+  });
+  ctx.lineTo(xFor(series[series.length - 1]), plot.top + plot.height);
+  ctx.closePath();
+  ctx.fill();
 }
 
 function drawTrendLine(ctx, series, xFor, yFor, color, width) {
@@ -484,21 +568,30 @@ function renderPowerFactors(factors) {
   for (const factor of factors) {
     const card = document.createElement("div");
     card.className = "factorCard";
+    card.style.setProperty("--score", `${clamp(Number(factor.score || 0) * 10, 0, 100)}%`);
+    const gauge = document.createElement("div");
+    gauge.className = "factorGauge";
+    gauge.style.setProperty("--score", `${clamp(Number(factor.score || 0) * 10, 0, 100)}%`);
+    appendText(gauge, "strong", fmtScore(factor.score));
+    appendText(gauge, "span", `${Math.round(Number(factor.weight || 0) * 100)}% wt`);
+    const body = document.createElement("div");
+    body.className = "factorBody";
     const top = document.createElement("div");
     top.className = "factorTop";
     appendText(top, "strong", factor.name || "Factor");
-    appendText(top, "span", `${fmtScore(factor.score)}/10`);
+    appendText(top, "span", `${fmtScore(factor.score)}/10`, "factorScore");
     const bar = document.createElement("div");
     bar.className = "scoreBar";
     const fill = document.createElement("i");
     fill.style.width = `${Math.max(0, Math.min(100, Number(factor.score || 0) * 10))}%`;
     bar.appendChild(fill);
-    appendText(card, "p", factor.detail || "");
     const evidence = document.createElement("div");
     evidence.className = "factorEvidence";
     (factor.evidence || []).forEach(item => appendText(evidence, "span", item));
-    card.prepend(top, bar);
-    if (evidence.childElementCount) card.appendChild(evidence);
+    body.append(top, bar);
+    appendText(body, "p", factor.detail || "");
+    if (evidence.childElementCount) body.appendChild(evidence);
+    card.append(gauge, body);
     target.appendChild(card);
   }
 }
@@ -508,7 +601,7 @@ function renderRaceFunStats(items) {
   if (!target) return;
   target.innerHTML = "";
   if (!items.length) {
-    target.appendChild(empty("Position changes, ERS spend, fuel burn, and stint trivia appear after a race."));
+    target.appendChild(empty("Position changes, ERS spend, fuel burn, and race signals appear after a race."));
     return;
   }
   for (const item of items) {
@@ -528,12 +621,18 @@ function renderRacePhases(phases) {
     target.appendChild(empty("Opening, middle, and closing phase splits appear after clean laps."));
     return;
   }
+  const maxDelta = Math.max(400, ...phases.map(phase => Math.max(0, Number(phase.deltaToRaceBestMs || 0))));
   for (const phase of phases) {
     const card = document.createElement("div");
-    card.className = "phaseCard";
+    const delta = Number(phase.deltaToRaceBestMs || 0);
+    card.className = `phaseCard ${delta <= 500 ? "gain" : delta >= 1500 ? "loss" : "neutral"}`;
+    card.style.setProperty("--phase", `${clamp(Math.max(0, delta) / maxDelta * 100, 8, 100)}%`);
     const header = document.createElement("div");
     appendText(header, "strong", phase.name || "Phase");
     appendText(header, "span", `Laps ${phase.lapRange || "--"}`);
+    const track = document.createElement("div");
+    track.className = "phaseTrack";
+    track.appendChild(document.createElement("i"));
     const metrics = document.createElement("div");
     metrics.className = "miniMetrics";
     metrics.append(metricPill("Avg", phase.averageLapTime || "--"));
@@ -541,7 +640,7 @@ function renderRacePhases(phases) {
     metrics.append(metricPill("Vs best", fmtMs(phase.deltaToRaceBestMs)));
     metrics.append(metricPill("Control", phase.averageControlScore === null || phase.averageControlScore === undefined ? "--" : `${phase.averageControlScore}/100`));
     appendText(card, "p", phase.note || "");
-    card.prepend(header, metrics);
+    card.prepend(header, track, metrics);
     target.appendChild(card);
   }
 }
@@ -553,10 +652,17 @@ function renderRaceSectors(sectors) {
     target.appendChild(empty("Sector trends need clean laps with sector timing."));
     return;
   }
+  const maxSpread = Math.max(1, ...sectors.map(sector => Number(sector.spreadMs || 0)));
   for (const sector of sectors) {
     const row = document.createElement("div");
-    row.className = "sectorRow";
+    const spread = Number(sector.spreadMs || 0);
+    row.className = `sectorRow ${spread <= 500 ? "gain" : spread >= 1800 ? "loss" : "neutral"}`;
+    row.style.setProperty("--spread", `${clamp(spread / maxSpread * 100, 5, 100)}%`);
     appendText(row, "strong", sector.sector || "Sector");
+    const bar = document.createElement("div");
+    bar.className = "sectorBar";
+    bar.appendChild(document.createElement("i"));
+    row.appendChild(bar);
     appendText(row, "span", `Best L${sector.bestLapNum} ${sector.best || "--"}`);
     appendText(row, "span", `Avg ${sector.average || "--"}`);
     appendText(row, "span", `Spread ${sector.spread || "--"}`);
@@ -615,6 +721,47 @@ function renderRacePlan(items) {
   });
 }
 
+function renderRaceLapRibbon(rows, summary) {
+  const target = document.getElementById("raceLapRibbon");
+  if (!target) return;
+  target.innerHTML = "";
+  if (!rows.length) {
+    target.appendChild(empty("Lap delta ribbon appears after the first completed race lap."));
+    return;
+  }
+  const finiteDeltas = rows
+    .map(row => Math.max(0, Number(row.deltaToBestMs || 0)))
+    .filter(value => Number.isFinite(value));
+  const maxDelta = Math.max(500, ...finiteDeltas);
+  rows.forEach(row => {
+    const delta = Number(row.deltaToBestMs || 0);
+    const control = Number(row.controlScore || 0);
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = `raceLapTile ${row.status === "Invalid" ? "invalid" : row.rankingEligible === false ? "excluded" : delta <= 500 ? "gain" : delta >= 1800 ? "loss" : "neutral"}`;
+    tile.style.setProperty("--delta", `${clamp(Math.max(0, delta) / maxDelta * 100, 4, 100)}%`);
+    tile.style.setProperty("--control", `${clamp(control, 0, 100)}%`);
+    tile.title = `Lap ${row.lapNum}: ${row.lapTime || "--"} · ${row.note || row.status || ""}`;
+    appendText(tile, "span", `L${row.lapNum}`);
+    appendText(tile, "strong", fmtMs(row.deltaToBestMs));
+    appendText(tile, "small", [row.position ? `P${row.position}` : "", row.lapTime || ""].filter(Boolean).join(" · "));
+    const bars = document.createElement("i");
+    tile.appendChild(bars);
+    target.appendChild(tile);
+  });
+  const expected = summary && summary.expectedLaps;
+  if (expected && rows.length < expected) {
+    for (let lapNum = rows.length + 1; lapNum <= expected; lapNum += 1) {
+      const tile = document.createElement("div");
+      tile.className = "raceLapTile pending";
+      appendText(tile, "span", `L${lapNum}`);
+      appendText(tile, "strong", "--");
+      appendText(tile, "small", "pending");
+      target.appendChild(tile);
+    }
+  }
+}
+
 function renderRaceLapTable(rows) {
   const target = document.getElementById("raceLapTable");
   target.innerHTML = "";
@@ -646,33 +793,44 @@ function renderRaceLapTable(rows) {
 function renderMap(state, selectedLap, insights) {
   const { ctx, w, h } = canvasContext(mapCanvas);
   clearCanvas(ctx, w, h);
-  const selectedSamples = orderedMapSamples(selectedLap && selectedLap.samples || []);
-  const fallbackSamples = orderedMapSamples(state.trackMap && state.trackMap.samples || []);
+  const selectedTraceSamples = orderedTraceSamples(selectedLap && selectedLap.samples || []);
+  const selectedSamples = stableMapSamples(selectedLap && selectedLap.samples || []);
+  const fallbackSamples = stableMapSamples(state.trackMap && state.trackMap.samples || []);
   const ref = selectedSamples.length ? selectedSamples : fallbackSamples;
   const referenceSamples = referenceTraceSamples(state);
+  const selectedInsight = (insights || [])[selectedInsightIndex];
   document.getElementById("mapHint").textContent = selectedLap
     ? `Lap ${selectedLap.lapNum} trace vs ${referenceSamples.length ? traceReferenceLabel(state) : "reference pending"}`
     : "Complete a lap with motion packets";
-  if (ref.length < 2) {
+  if (ref.length < 2 && selectedTraceSamples.length < 2) {
     centerText(ctx, w, h, "No lap map available yet");
     return;
   }
-  const bounds = getBounds(ref);
-  drawGroupedPath(ctx, ref, bounds, "#2e2738", 11);
-  drawGroupedPath(ctx, ref, bounds, "#111016", 7);
-  if (selectedSamples.length >= 2 && referenceSamples.length) {
-    drawDeltaPath(ctx, selectedSamples, referenceSamples, bounds);
-  } else if (selectedSamples.length >= 2) {
-    drawGroupedPath(ctx, selectedSamples, bounds, "#45d6ff", 5);
-  } else {
-    drawGroupedPath(ctx, ref, bounds, "#ffd166", 5);
+
+  const groups = usableMapGroups(sampleGroups(ref));
+  const worldSamples = groups.flat();
+  if (mapPathIsUsable(groups)) {
+    const bounds = getBounds(worldSamples);
+    drawGroupedPath(ctx, worldSamples, bounds, "#2e2738", 11);
+    drawGroupedPath(ctx, worldSamples, bounds, "#111016", 7);
+    if (selectedSamples.length >= 2 && referenceSamples.length) {
+      drawDeltaPath(ctx, selectedSamples, referenceSamples, bounds);
+    } else if (selectedSamples.length >= 2) {
+      drawGroupedPath(ctx, selectedSamples, bounds, "#45d6ff", 5);
+    } else {
+      drawGroupedPath(ctx, worldSamples, bounds, "#ffd166", 5);
+    }
+    if (selectedInsight) {
+      const segment = worldSamples.filter(s => s.normalizedDistance >= selectedInsight.start_pct / 100 && s.normalizedDistance <= selectedInsight.end_pct / 100);
+      drawGroupedPath(ctx, segment, bounds, "#fff7ee", 13);
+      drawGroupedPath(ctx, segment, bounds, "#45d6ff", 8);
+    }
+    drawStartMarker(ctx, worldSamples, bounds);
+    return;
   }
-  const selectedInsight = (insights || [])[selectedInsightIndex];
-  if (selectedInsight) {
-    const segment = ref.filter(s => s.normalizedDistance >= selectedInsight.start_pct / 100 && s.normalizedDistance <= selectedInsight.end_pct / 100);
-    drawGroupedPath(ctx, segment, bounds, "#fff7ee", 13);
-    drawGroupedPath(ctx, segment, bounds, "#45d6ff", 8);
-  }
+
+  document.getElementById("mapHint").textContent += " · schematic fallback";
+  drawSchematicCircuit(ctx, w, h, selectedTraceSamples.length ? selectedTraceSamples : referenceSamples, referenceSamples, selectedInsight);
 }
 
 function renderTrace(state, selectedLap, insights) {
@@ -809,6 +967,105 @@ function drawPath(ctx, samples, bounds, color, width) {
   ctx.stroke();
 }
 
+function drawStartMarker(ctx, samples, bounds) {
+  const start = samples.reduce((best, sample) => (
+    best === null || sample.normalizedDistance < best.normalizedDistance ? sample : best
+  ), null);
+  if (!start) return;
+  const [x, y] = project(start, bounds);
+  ctx.fillStyle = "#fff7ee";
+  ctx.strokeStyle = "#111016";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+}
+
+function drawSchematicCircuit(ctx, w, h, samples, referenceSamples, selectedInsight) {
+  const ordered = orderedTraceSamples(samples);
+  if (ordered.length < 2) {
+    centerText(ctx, w, h, "No stable map samples yet");
+    return;
+  }
+  drawSchematicPath(ctx, w, h, "#2e2738", 12);
+  drawSchematicPath(ctx, w, h, "#111016", 8);
+  const segments = 96;
+  for (let index = 1; index <= segments; index += 1) {
+    const start = (index - 1) / segments;
+    const end = index / segments;
+    const midpoint = (start + end) / 2;
+    const deltaMs = referenceSamples.length ? localSegmentDelta(ordered, referenceSamples, midpoint) : null;
+    ctx.strokeStyle = deltaMs === null ? "#45d6ff" : deltaColor(deltaMs);
+    ctx.lineWidth = 6;
+    ctx.lineCap = "round";
+    const [x1, y1] = schematicPoint(start, w, h);
+    const [x2, y2] = schematicPoint(end, w, h);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+  if (selectedInsight) {
+    ctx.strokeStyle = "#fff7ee";
+    ctx.lineWidth = 12;
+    ctx.lineCap = "round";
+    const start = selectedInsight.start_pct / 100;
+    const end = selectedInsight.end_pct / 100;
+    for (let pct = start + 0.01; pct <= end + 0.001; pct += 0.01) {
+      const [x1, y1] = schematicPoint(Math.max(start, pct - 0.01), w, h);
+      const [x2, y2] = schematicPoint(Math.min(end, pct), w, h);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = "#45d6ff";
+    ctx.lineWidth = 7;
+    for (let pct = start + 0.01; pct <= end + 0.001; pct += 0.01) {
+      const [x1, y1] = schematicPoint(Math.max(start, pct - 0.01), w, h);
+      const [x2, y2] = schematicPoint(Math.min(end, pct), w, h);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+  }
+  const [sx, sy] = schematicPoint(0, w, h);
+  ctx.fillStyle = "#fff7ee";
+  ctx.beginPath();
+  ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawSchematicPath(ctx, w, h, color, width) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  for (let index = 0; index <= 120; index += 1) {
+    const [x, y] = schematicPoint(index / 120, w, h);
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+function schematicPoint(distance, w, h) {
+  const pad = 52;
+  const cx = w / 2;
+  const cy = h / 2;
+  const rx = Math.max(80, (w - pad * 2) / 2);
+  const ry = Math.max(80, (h - pad * 2) / 2);
+  const angle = -Math.PI / 2 + distance * Math.PI * 2;
+  const wobble = 1 + Math.sin(angle * 3) * 0.08 + Math.cos(angle * 5) * 0.05;
+  return [
+    cx + Math.cos(angle) * rx * wobble,
+    cy + Math.sin(angle) * ry * (1 + Math.cos(angle * 2) * 0.10),
+  ];
+}
+
 function selectedLapFromState(state) {
   const laps = state.completedLaps || [];
   const selectable = laps.filter(lap => lap.samples && lap.samples.length);
@@ -853,16 +1110,44 @@ function orderedTraceSamples(samples) {
 }
 
 function orderedMapSamples(samples) {
-  return orderedSamples(samples).filter(sample => sample.worldPosition && sample.worldPosition.length === 3);
+  return orderedSamples(samples).filter(finiteMapSample);
+}
+
+function finiteMapSample(sample) {
+  return sample.worldPosition
+    && sample.worldPosition.length === 3
+    && Number.isFinite(Number(sample.worldPosition[0]))
+    && Number.isFinite(Number(sample.worldPosition[2]));
+}
+
+function stableMapSamples(samples) {
+  const ordered = orderedMapSamples(samples);
+  if (ordered.length < 8) return ordered;
+  const nonZero = ordered.filter(sample => Math.hypot(Number(sample.worldPosition[0]), Number(sample.worldPosition[2])) > 0.001);
+  return nonZero.length >= ordered.length * 0.85 ? nonZero : ordered;
 }
 
 function sampleGroups(samples) {
-  const ordered = orderedMapSamples(samples);
+  const ordered = stableMapSamples(samples);
   const groups = [];
   let current = [];
+  const bounds = ordered.length >= 2 ? getBounds(ordered) : null;
+  const trackSpan = bounds ? Math.hypot(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY) : 0;
+  const stepDistances = [];
+  for (let index = 1; index < ordered.length; index += 1) {
+    const previous = ordered[index - 1];
+    const sample = ordered[index];
+    const distanceGap = sample.normalizedDistance - previous.normalizedDistance;
+    const spatialGap = mapPointDistance(previous, sample);
+    if (distanceGap >= 0 && distanceGap <= 0.04 && spatialGap > 0) stepDistances.push(spatialGap);
+  }
+  const medianStep = median(stepDistances);
+  const maxSpatialJump = Math.max(trackSpan * 0.16, medianStep * 12, 35);
   for (const sample of ordered) {
     const previous = current[current.length - 1];
-    if (previous && sample.normalizedDistance - previous.normalizedDistance > 0.04) {
+    const distanceGap = previous ? sample.normalizedDistance - previous.normalizedDistance : 0;
+    const spatialGap = previous ? mapPointDistance(previous, sample) : 0;
+    if (previous && (distanceGap > 0.04 || distanceGap < -0.002 || spatialGap > maxSpatialJump)) {
       if (current.length >= 2) groups.push(current);
       current = [];
     }
@@ -870,6 +1155,35 @@ function sampleGroups(samples) {
   }
   if (current.length >= 2) groups.push(current);
   return groups;
+}
+
+function mapPathIsUsable(groups) {
+  if (!groups.length) return false;
+  const largest = groups.reduce((best, group) => group.length > best.length ? group : best, groups[0]);
+  if (largest.length < 8) return false;
+  const coverage = largest[largest.length - 1].normalizedDistance - largest[0].normalizedDistance;
+  return coverage >= 0.35 || groups.reduce((total, group) => total + group.length, 0) >= 24;
+}
+
+function usableMapGroups(groups) {
+  if (!groups.length) return [];
+  const largest = groups.reduce((best, group) => group.length > best.length ? group : best, groups[0]);
+  const minLength = Math.max(3, Math.round(largest.length * 0.14));
+  return groups.filter(group => group.length >= minLength);
+}
+
+function mapPointDistance(a, b) {
+  return Math.hypot(
+    Number(a.worldPosition[0]) - Number(b.worldPosition[0]),
+    Number(a.worldPosition[2]) - Number(b.worldPosition[2]),
+  );
+}
+
+function median(values) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 function getBounds(samples) {
@@ -996,6 +1310,11 @@ function fmtMs(ms) {
   return sign + (Math.abs(ms) / 1000).toFixed(2) + "s";
 }
 
+function fmtSectorMs(ms) {
+  if (ms === null || ms === undefined || Number(ms) <= 0) return "--";
+  return (Number(ms) / 1000).toFixed(3) + "s";
+}
+
 function fmtErs(kj) {
   if (kj === null || kj === undefined) return "ERS --";
   if (kj >= 1000) return `ERS ${(kj / 1000).toFixed(1)} MJ`;
@@ -1023,6 +1342,11 @@ function fmtPct(value) {
 function fmtScore(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
   return Number(value).toFixed(1);
+}
+
+function clamp(value, min, max) {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, value));
 }
 
 function raceTyreFuel(lap) {

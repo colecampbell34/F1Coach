@@ -139,6 +139,7 @@ class DynamicSegmentContext:
 
 class LapCoach:
     ACTIVE_DRIVER_STATUSES = {1, 2, 3, 4}
+    RESULT_STATUS_FINISHED = 3
 
     def __init__(
         self,
@@ -154,7 +155,11 @@ class LapCoach:
         self.track_length_m: int | None = None
         self.track_id: int | None = None
         self.session_type: int | None = None
+        self.total_laps: int | None = None
         self.safety_car_status = 0
+        self.latest_result_status: int | None = None
+        self.race_finished = False
+        self.race_finished_lap_num: int | None = None
         self.latest_telemetry: CarTelemetrySnapshot | None = None
         self.latest_status: CarStatusSnapshot | None = None
         self.latest_motion: MotionSnapshot | None = None
@@ -198,11 +203,16 @@ class LapCoach:
         track_id: int | None = None,
         track_length_m: int | None = None,
         session_type: int | None = None,
+        total_laps: int | None = None,
     ) -> list[str]:
         self.track_length_m = track_length_m
         self.track_id = track_id
         self.session_type = session_type
+        self.total_laps = total_laps
         self.safety_car_status = 0
+        self.latest_result_status = None
+        self.race_finished = False
+        self.race_finished_lap_num = None
         self.latest_telemetry = None
         self.latest_status = None
         self.latest_motion = None
@@ -250,6 +260,7 @@ class LapCoach:
         notices: list[str] = []
         self.session_type = message.session_type
         self.safety_car_status = message.safety_car_status
+        incoming_total_laps = message.total_laps if message.total_laps > 0 else None
         track_changed = (
             self.track_length_m is not None
             and message.track_length_m > 0
@@ -263,8 +274,11 @@ class LapCoach:
                     track_id=message.track_id,
                     track_length_m=message.track_length_m,
                     session_type=message.session_type,
+                    total_laps=incoming_total_laps,
                 )
             )
+        if incoming_total_laps is not None:
+            self.total_laps = incoming_total_laps
         if message.track_length_m > 0 and message.track_length_m != self.track_length_m:
             self.track_length_m = message.track_length_m
             self.track_id = message.track_id
@@ -282,9 +296,11 @@ class LapCoach:
 
     def _update_lap(self, lap: LapSnapshot) -> list[str]:
         notices: list[str] = []
-        if lap.driver_status not in self.ACTIVE_DRIVER_STATUSES:
+        race_finished_packet = self._is_race_finished_packet(lap)
+        if lap.driver_status not in self.ACTIVE_DRIVER_STATUSES and not race_finished_packet:
             return notices
         self.latest_lap = lap
+        self.latest_result_status = lap.result_status
 
         if self.active_lap_num is None:
             self.active_lap_num = lap.current_lap_num
@@ -292,9 +308,7 @@ class LapCoach:
         if lap.current_lap_num != self.active_lap_num:
             completed = self._complete_lap(lap)
             if completed is not None:
-                notices.extend(self._summarize_completed_lap(completed))
-                self.completed_laps.append(completed)
-                self.completed_laps = self.completed_laps[-120:]
+                notices.extend(self._record_completed_lap(completed))
             self.active_lap_num = lap.current_lap_num
             self._reset_active_lap_state()
             self.active_sector1_time_ms = 0
@@ -314,16 +328,21 @@ class LapCoach:
             hint = self._live_hint(sample)
             if hint is not None:
                 notices.append(hint)
+        if race_finished_packet:
+            notices.extend(self._finalize_race_if_needed(lap))
         return notices
 
     def _complete_lap(self, new_lap_snapshot: LapSnapshot) -> CompletedLap | None:
         if self.active_lap_num is None or new_lap_snapshot.last_lap_time_ms <= 0:
             return None
+        return self._build_completed_lap(new_lap_snapshot.last_lap_time_ms, new_lap_snapshot)
+
+    def _build_completed_lap(self, lap_time_ms: int, lap_snapshot: LapSnapshot) -> CompletedLap:
         game_invalid = self._active_lap_game_invalid()
         self.completed_lap_sequence += 1
         return CompletedLap(
             lap_num=self.completed_lap_sequence,
-            lap_time_ms=new_lap_snapshot.last_lap_time_ms,
+            lap_time_ms=lap_time_ms,
             sector1_time_ms=self.active_sector1_time_ms,
             sector2_time_ms=self.active_sector2_time_ms,
             invalid=self._active_lap_invalid(),
@@ -333,11 +352,73 @@ class LapCoach:
             fuel_remaining_laps=self.latest_status.fuel_remaining_laps if self.latest_status is not None else None,
             actual_tyre_compound=self.latest_status.actual_tyre_compound if self.latest_status is not None else None,
             visual_tyre_compound=self.latest_status.visual_tyre_compound if self.latest_status is not None else None,
-            race_position=new_lap_snapshot.car_position if new_lap_snapshot.car_position > 0 else None,
+            race_position=lap_snapshot.car_position if lap_snapshot.car_position > 0 else None,
             pit_statuses=tuple(sorted(self.active_pit_statuses)),
             safety_car_statuses=tuple(sorted(self.active_safety_car_statuses)),
             fia_flag_statuses=tuple(sorted(self.active_fia_flag_statuses)),
         )
+
+    def _record_completed_lap(self, completed: CompletedLap) -> list[str]:
+        notices = self._summarize_completed_lap(completed)
+        self.completed_laps.append(completed)
+        self.completed_laps = self.completed_laps[-120:]
+        return notices
+
+    def _is_race_finished_packet(self, lap: LapSnapshot) -> bool:
+        return lap.result_status == self.RESULT_STATUS_FINISHED
+
+    def _finalize_race_if_needed(self, lap: LapSnapshot) -> list[str]:
+        if self.race_finished:
+            return []
+        self.race_finished = True
+        self.race_finished_lap_num = self.completed_laps[-1].lap_num if self.completed_laps else None
+        if not self._should_finalize_active_race_lap(lap):
+            return self._race_finished_notice()
+
+        final_lap_time_ms = self._finished_lap_time_ms(lap)
+        if final_lap_time_ms is None:
+            return self._race_finished_notice()
+
+        completed = self._build_completed_lap(final_lap_time_ms, lap)
+        notices = self._record_completed_lap(completed)
+        self.race_finished_lap_num = completed.lap_num
+        self.active_lap_num = None
+        self._reset_active_lap_state()
+        self.active_sector1_time_ms = 0
+        self.active_sector2_time_ms = 0
+        self.active_samples = []
+        notices.extend(self._race_finished_notice())
+        return notices
+
+    def _should_finalize_active_race_lap(self, lap: LapSnapshot) -> bool:
+        if self.active_lap_num is None:
+            return False
+        if self.total_laps is not None:
+            if len(self.completed_laps) >= self.total_laps:
+                return False
+            if self.active_lap_num > self.total_laps and lap.current_lap_num > self.total_laps:
+                return False
+        return self._finished_lap_time_ms(lap) is not None
+
+    def _finished_lap_time_ms(self, lap: LapSnapshot) -> int | None:
+        latest_sample_ms = max((sample.lap_time_ms for sample in self.active_samples), default=0)
+        if lap.current_lap_time_ms >= 10_000:
+            return lap.current_lap_time_ms
+        one_lap_remaining = self.total_laps is not None and len(self.completed_laps) < self.total_laps
+        if lap.last_lap_time_ms > 0 and one_lap_remaining:
+            return lap.last_lap_time_ms
+        if lap.last_lap_time_ms > 0 and self.completed_laps and self.completed_laps[-1].lap_time_ms == lap.last_lap_time_ms:
+            return None
+        if lap.last_lap_time_ms > 0:
+            return lap.last_lap_time_ms
+        if latest_sample_ms >= 10_000:
+            return latest_sample_ms
+        return None
+
+    def _race_finished_notice(self) -> list[str]:
+        lap_count = len(self.completed_laps)
+        expected = f"/{self.total_laps}" if self.total_laps is not None else ""
+        return [f"Race complete: {lap_count}{expected} laps captured. Race Overview finalized."]
 
     def _reset_active_lap_state(self) -> None:
         self.active_invalid = False
@@ -1297,7 +1378,11 @@ class LapCoach:
                 "trackName": track_name_for_id(self.track_id),
                 "trackLengthM": self.track_length_m,
                 "sessionType": self.session_type,
+                "totalLaps": self.total_laps,
                 "safetyCarStatus": self.safety_car_status,
+                "resultStatus": self.latest_result_status,
+                "raceFinished": self.race_finished,
+                "raceFinishedLapNum": self.race_finished_lap_num,
             },
             "cornerMetadata": self._corner_metadata_status(),
             "drivingGoal": self.driving_goal,
@@ -1402,6 +1487,9 @@ class LapCoach:
                 "status": "waiting",
                 "summary": {
                     "totalLaps": 0,
+                    "expectedLaps": self.total_laps,
+                    "lapsRemaining": self.total_laps,
+                    "raceComplete": self.race_finished,
                     "cleanLaps": 0,
                     "invalidLaps": 0,
                     "raceTime": "--",
@@ -1475,9 +1563,12 @@ class LapCoach:
         fun_stats = self._race_fun_stats(rows, phases, longest_scored_streak)
 
         return {
-            "status": "ready" if scored_laps else "needs-representative-lap",
+            "status": "complete" if self.race_finished else "ready" if scored_laps else "needs-representative-lap",
             "summary": {
                 "totalLaps": len(laps),
+                "expectedLaps": self.total_laps,
+                "lapsRemaining": max(0, self.total_laps - len(laps)) if self.total_laps is not None else None,
+                "raceComplete": self.race_finished,
                 "cleanLaps": len(clean_laps),
                 "scoredLaps": len(scored_laps),
                 "excludedLaps": len(laps) - len(scored_laps),
@@ -2446,24 +2537,39 @@ class LapCoach:
             and sample.avg_slip_ratio > 0.28
             and sample.throttle > 0.55,
         )
+        full_throttle_pct = self._sample_pct(samples, lambda sample: sample.throttle >= 0.95)
+        braking_pct = self._sample_pct(samples, lambda sample: sample.brake >= 0.10)
+        coast_pct = self._sample_pct(samples, lambda sample: sample.throttle < 0.05 and sample.brake < 0.05)
+        throttle_snap_pct = self._transition_pct(samples, lambda previous, current: abs(current.throttle - previous.throttle) >= 0.42)
+        brake_snap_pct = self._transition_pct(samples, lambda previous, current: abs(current.brake - previous.brake) >= 0.38)
+        steer_snap_pct = self._transition_pct(samples, lambda previous, current: abs(current.steer - previous.steer) >= 0.34)
         control_score = 100.0
-        control_score -= overlap_pct * 1.0
-        control_score -= max(0.0, steering_throttle_pct - 8.0) * 0.7
-        control_score -= high_slip_pct * 0.9
+        control_score -= overlap_pct * 2.2
+        control_score -= steering_throttle_pct * 1.2
+        control_score -= high_slip_pct * 1.5
+        control_score -= max(0.0, coast_pct - 8.0) * 0.65
+        control_score -= max(0.0, braking_pct - 24.0) * 0.25
+        control_score -= max(0.0, 46.0 - full_throttle_pct) * 0.20
+        control_score -= throttle_snap_pct * 0.45
+        control_score -= brake_snap_pct * 0.45
+        control_score -= steer_snap_pct * 0.35
         if avg_slip is not None and avg_slip > 0.22:
-            control_score -= (avg_slip - 0.22) * 80
+            control_score -= (avg_slip - 0.22) * 120
 
         return {
             "sampleCount": len(samples),
             "avgSpeedKmh": round(self._avg(sample.speed_kmh for sample in samples), 1),
             "topSpeedKmh": max(sample.speed_kmh for sample in samples),
-            "fullThrottlePct": self._sample_pct(samples, lambda sample: sample.throttle >= 0.95),
-            "brakingPct": self._sample_pct(samples, lambda sample: sample.brake >= 0.10),
-            "coastPct": self._sample_pct(samples, lambda sample: sample.throttle < 0.05 and sample.brake < 0.05),
+            "fullThrottlePct": full_throttle_pct,
+            "brakingPct": braking_pct,
+            "coastPct": coast_pct,
             "brakeThrottleOverlapPct": overlap_pct,
             "steeringThrottlePct": steering_throttle_pct,
             "highSlipPct": high_slip_pct if slip_values else None,
             "avgSlipRatio": round(avg_slip, 3) if avg_slip is not None else None,
+            "throttleSnapPct": throttle_snap_pct,
+            "brakeSnapPct": brake_snap_pct,
+            "steerSnapPct": steer_snap_pct,
             "controlScore": round(max(0.0, min(100.0, control_score))),
         }
 
@@ -2478,6 +2584,8 @@ class LapCoach:
         high_slip = overview.get("highSlipPct")
         coast = float(overview.get("coastPct") or 0.0)
         full_throttle = float(overview.get("fullThrottlePct") or 0.0)
+        throttle_snap = float(overview.get("throttleSnapPct") or 0.0)
+        brake_snap = float(overview.get("brakeSnapPct") or 0.0)
 
         if overlap >= 6.0:
             notes.append(f"Brake/throttle overlap is {overlap:.1f}% of samples; separate the pedals in braking zones.")
@@ -2487,6 +2595,8 @@ class LapCoach:
             )
         if high_slip is not None and float(high_slip) >= 8.0:
             notes.append(f"Driven-wheel slip is elevated on {float(high_slip):.1f}% of traction samples.")
+        if throttle_snap >= 12.0 or brake_snap >= 12.0:
+            notes.append("Input transitions are abrupt; smooth the brake release and throttle pickup.")
         if coast >= 18.0:
             notes.append(f"Coasting is {coast:.1f}% of samples; check whether entries need a cleaner brake release.")
         if full_throttle >= 58.0 and overlap < 4.0 and (high_slip is None or float(high_slip) < 5.0):
@@ -2501,6 +2611,18 @@ class LapCoach:
             return 0.0
         matches = sum(1 for sample in samples if predicate(sample))
         return round(matches / len(samples) * 100, 1)
+
+    @staticmethod
+    def _transition_pct(samples: list[LapSample], predicate: Any) -> float:
+        pairs = [
+            (previous, current)
+            for previous, current in zip(samples, samples[1:])
+            if 0 < current.normalized_distance - previous.normalized_distance <= 0.06
+        ]
+        if not pairs:
+            return 0.0
+        matches = sum(1 for previous, current in pairs if predicate(previous, current))
+        return round(matches / len(pairs) * 100, 1)
 
     def _live_sample(self) -> LapSample | None:
         if self.latest_lap is None or self.latest_telemetry is None:

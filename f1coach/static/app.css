@@ -17,11 +17,16 @@
   --violet: #a66bff;
 }
 * { box-sizing: border-box; }
-html, body { height: 100%; min-height: 100%; }
+html {
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
 body {
   margin: 0;
   min-height: 100vh;
-  overflow: auto;
+  height: auto;
+  overflow: visible;
   background:
     linear-gradient(135deg, rgba(255,54,94,.15), transparent 28%),
     linear-gradient(220deg, rgba(69,214,255,.13), transparent 32%),
@@ -59,7 +64,7 @@ button.active {
 .appShell {
   min-height: 100vh;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
   overflow: visible;
 }
 .heroBar {
@@ -186,12 +191,11 @@ button.active {
   display: none !important;
 }
 .reviewGrid {
-  min-height: 0;
-  min-height: 980px;
-  height: calc(100vh - 72px);
+  min-height: calc(100vh - 72px);
+  height: auto;
   display: grid;
-  grid-template-columns: minmax(560px, 1.35fr) 320px 320px;
-  grid-template-rows: minmax(84px, auto) minmax(460px, 1fr) minmax(300px, .65fr) minmax(150px, .28fr);
+  grid-template-columns: minmax(560px, 3fr) repeat(2, minmax(190px, 1fr));
+  grid-template-rows: 106px minmax(310px, .75fr) 240px 220px;
   gap: 8px;
   padding: 8px;
 }
@@ -201,7 +205,7 @@ button.active {
   grid-template-columns: minmax(260px, 1fr) auto;
   gap: 8px;
   align-items: stretch;
-  min-height: 84px;
+  min-height: 0;
   padding: 8px;
   border: 1px solid var(--line-strong);
   border-radius: 8px;
@@ -216,13 +220,17 @@ button.active {
 }
 .reviewCopy h2 {
   max-width: 760px;
-  font-size: 21px;
+  font-size: 19px;
   line-height: 1.05;
 }
 .reviewCopy p {
   max-width: 760px;
   line-height: 1.22;
   font-size: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .reviewStats {
   display: grid;
@@ -255,6 +263,12 @@ button.active {
   grid-template-columns: repeat(7, minmax(86px, 1fr));
   gap: 6px;
 }
+.lapPulseStrip {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(90px, 1fr));
+  gap: 6px;
+}
 .profilePill {
   min-width: 0;
   display: grid;
@@ -264,6 +278,25 @@ button.active {
   border-radius: 8px;
   background: rgba(8,7,10,.42);
 }
+.profilePill i, .pulseTile i {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255,255,255,.10);
+}
+.profilePill i::before, .pulseTile i::before {
+  content: "";
+  display: block;
+  width: var(--fill, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--cyan), var(--yellow));
+}
+.profilePill.green i::before, .pulseTile.gain i::before { background: linear-gradient(90deg, var(--green), var(--cyan)); }
+.profilePill.yellow i::before, .pulseTile.neutral i::before { background: linear-gradient(90deg, var(--yellow), var(--orange)); }
+.profilePill.red i::before, .pulseTile.loss i::before { background: linear-gradient(90deg, var(--red), var(--orange)); }
+.profilePill.violet i::before { background: linear-gradient(90deg, var(--violet), var(--cyan)); }
 .profilePill span {
   font-size: 10px;
   text-transform: uppercase;
@@ -273,6 +306,31 @@ button.active {
   overflow-wrap: anywhere;
   color: var(--text);
   font-size: 13px;
+}
+.pulseTile {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.05), transparent 64%),
+    rgba(8,7,10,.48);
+}
+.pulseTile span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.pulseTile strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.08;
 }
 .panel {
   min-width: 0;
@@ -299,37 +357,40 @@ button.active {
   line-height: 1.2;
 }
 .circuitPanel {
-  grid-column: 1 / span 2;
-  grid-row: 2;
+  grid-column: 1;
+  grid-row: 2 / span 2;
 }
 .focusPanel {
-  grid-column: 3;
+  grid-column: 2 / span 2;
   grid-row: 2;
 }
 .tracePanel {
-  grid-column: 1 / span 2;
-  grid-row: 3;
+  grid-column: 1;
+  grid-row: 4;
 }
 .lapShelf {
-  grid-column: 3;
+  grid-column: 2;
   grid-row: 3;
 }
 .notesPanel {
-  grid-column: 1 / span 2;
-  grid-row: 4;
+  grid-column: 3;
+  grid-row: 3;
   min-height: 0;
 }
 .linkPanel {
-  grid-column: 3;
+  grid-column: 2 / span 2;
   grid-row: 4;
   min-height: 0;
 }
-.circuitPanel, .tracePanel, .focusPanel, .lapShelf, .notesPanel {
+.circuitPanel, .tracePanel, .focusPanel, .lapShelf, .notesPanel, .linkPanel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
 }
-.circuitPanel canvas { min-height: 400px; }
-.tracePanel canvas { min-height: 250px; }
+.linkPanel {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+.circuitPanel canvas { min-height: 500px; }
+.tracePanel canvas { min-height: 130px; }
 canvas {
   display: block;
   width: 100%;
@@ -574,7 +635,7 @@ canvas {
   height: calc(100vh - 72px);
   display: grid;
   grid-template-columns: minmax(300px, 1fr) minmax(260px, .9fr) minmax(260px, .9fr) minmax(280px, .95fr);
-  grid-template-rows: 172px minmax(260px, .9fr) minmax(260px, 1fr) minmax(260px, 1fr) minmax(340px, 1.15fr);
+  grid-template-rows: 238px minmax(260px, .9fr) minmax(300px, 1fr) minmax(260px, .88fr) 170px minmax(280px, .92fr);
   gap: 8px;
   padding: 8px;
 }
@@ -584,6 +645,12 @@ canvas {
   grid-template-columns: 282px minmax(0, 1fr);
   gap: 8px;
   min-height: 0;
+}
+.raceHeroBody {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
 }
 .raceScoreCard {
   display: grid;
@@ -600,11 +667,23 @@ canvas {
 .scoreDial {
   display: flex;
   align-items: baseline;
+  justify-content: center;
   gap: 5px;
+}
+.scoreRing {
+  width: 112px;
+  height: 112px;
+  align-items: center;
+  justify-self: start;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, var(--surface) 0 55%, transparent 56%),
+    conic-gradient(var(--green) var(--score, 0%), rgba(255,255,255,.10) 0);
+  box-shadow: inset 0 0 0 1px var(--line), 0 0 34px rgba(63,240,154,.10);
 }
 .scoreDial strong {
   color: var(--text);
-  font-size: 52px;
+  font-size: 40px;
   line-height: .9;
 }
 .scoreDial span {
@@ -650,16 +729,50 @@ canvas {
   font-size: 16px;
   line-height: 1.08;
 }
+.raceStatusStrip {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+.statusChip {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-height: 50px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--yellow);
+  border-radius: 8px;
+  background: rgba(8,7,10,.38);
+}
+.statusChip.gain { border-left-color: var(--green); }
+.statusChip.loss { border-left-color: var(--red); }
+.statusChip.cyan { border-left-color: var(--cyan); }
+.statusChip.violet { border-left-color: var(--violet); }
+.statusChip span {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.statusChip strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.08;
+}
 .racePacePanel { grid-column: 1 / span 2; grid-row: 2; }
 .racePositionPanel { grid-column: 3 / span 2; grid-row: 2; }
-.powerPanel { grid-column: 1; grid-row: 3; }
-.phasePanel { grid-column: 2; grid-row: 3; }
-.sectorPanel { grid-column: 3; grid-row: 3; }
-.funPanel { grid-column: 4; grid-row: 3; }
-.riskPanel { grid-column: 1; grid-row: 4; }
-.standoutPanel { grid-column: 2; grid-row: 4; }
-.racePlanPanel { grid-column: 3 / span 2; grid-row: 4; }
-.raceTablePanel { grid-column: 1 / -1; grid-row: 5; }
+.powerPanel { grid-column: 1 / span 2; grid-row: 3 / span 2; }
+.funPanel { grid-column: 3; grid-row: 3; }
+.riskPanel { grid-column: 4; grid-row: 3; }
+.standoutPanel { grid-column: 3; grid-row: 4; }
+.racePlanPanel { grid-column: 4; grid-row: 4; }
+.raceRibbonPanel { grid-column: 1 / -1; grid-row: 5; }
+.raceTablePanel { grid-column: 1 / -1; grid-row: 6; }
 .chartPanel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -667,7 +780,7 @@ canvas {
 .chartPanel canvas {
   min-height: 210px;
 }
-.powerFactors, .racePhases, .raceSectors, .raceRisks, .raceStandouts, .racePlan, .raceFunStats {
+.powerFactors, .racePhases, .raceSectors, .raceRisks, .raceStandouts, .racePlan, .raceFunStats, .raceLapRibbon {
   min-height: 0;
   height: calc(100% - 42px);
   overflow: auto;
@@ -675,6 +788,9 @@ canvas {
   display: grid;
   align-content: start;
   gap: 6px;
+}
+.raceLapRibbon {
+  grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
 }
 .factorCard, .phaseCard, .riskCard, .standoutCard, .planStep, .sectorRow, .funStat {
   min-width: 0;
@@ -684,8 +800,41 @@ canvas {
 }
 .factorCard {
   display: grid;
-  gap: 6px;
-  padding: 8px;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  background:
+    linear-gradient(90deg, rgba(63,240,154,.10) var(--score, 0%), transparent 0),
+    var(--surface-2);
+}
+.factorGauge {
+  width: 66px;
+  height: 66px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 1px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, var(--surface-2) 0 55%, transparent 56%),
+    conic-gradient(var(--green) var(--score, 0%), rgba(255,255,255,.10) 0);
+}
+.factorGauge strong {
+  color: var(--text);
+  font-size: 19px;
+  line-height: 1;
+}
+.factorGauge span {
+  color: var(--yellow);
+  font-size: 9px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+.factorBody {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
 }
 .factorTop {
   display: flex;
@@ -700,8 +849,16 @@ canvas {
   color: var(--yellow);
   font-weight: 900;
 }
+.factorScore {
+  min-width: 44px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(0,0,0,.24);
+  text-align: center;
+}
 .scoreBar {
-  height: 7px;
+  height: 10px;
   overflow: hidden;
   border-radius: 999px;
   background: rgba(255,255,255,.08);
@@ -714,7 +871,7 @@ canvas {
 }
 .factorCard p, .phaseCard p {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.28;
 }
 .factorEvidence {
@@ -734,6 +891,9 @@ canvas {
   gap: 7px;
   padding: 8px;
 }
+.phaseCard.gain { border-left: 4px solid var(--green); }
+.phaseCard.neutral { border-left: 4px solid var(--yellow); }
+.phaseCard.loss { border-left: 4px solid var(--red); }
 .phaseCard > div:first-child {
   display: flex;
   justify-content: space-between;
@@ -743,6 +903,19 @@ canvas {
   color: var(--yellow);
   font-size: 12px;
   font-weight: 800;
+}
+.phaseTrack, .sectorBar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255,255,255,.08);
+}
+.phaseTrack i, .sectorBar i {
+  display: block;
+  width: var(--phase, var(--spread, 0%));
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--green), var(--yellow), var(--red));
 }
 .miniMetrics {
   display: grid;
@@ -840,17 +1013,96 @@ canvas {
   gap: 3px 8px;
   padding: 8px;
 }
+.sectorRow.gain { border-left: 4px solid var(--green); }
+.sectorRow.neutral { border-left: 4px solid var(--yellow); }
+.sectorRow.loss { border-left: 4px solid var(--red); }
 .sectorRow strong {
-  grid-row: span 4;
+  grid-row: span 5;
   display: grid;
   place-items: center;
   border-radius: 8px;
   background: rgba(255,209,102,.13);
   color: var(--yellow);
 }
+.sectorBar {
+  align-self: center;
+}
 .sectorRow span {
   font-size: 12px;
   line-height: 1.22;
+}
+.raceLapTile {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-height: 78px;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--yellow);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.04), transparent),
+    var(--surface-2);
+  text-align: left;
+}
+.raceLapTile::before {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: var(--delta, 0%);
+  max-height: 100%;
+  background: rgba(255,209,102,.13);
+  pointer-events: none;
+}
+.raceLapTile.gain { border-left-color: var(--green); }
+.raceLapTile.gain::before { background: rgba(63,240,154,.16); }
+.raceLapTile.loss { border-left-color: var(--red); }
+.raceLapTile.loss::before { background: rgba(255,54,94,.15); }
+.raceLapTile.excluded { border-left-color: var(--quiet); }
+.raceLapTile.invalid { border-left-color: var(--red); opacity: .72; }
+.raceLapTile.pending {
+  border-style: dashed;
+  border-left-color: var(--quiet);
+  background: rgba(255,255,255,.025);
+}
+.raceLapTile span, .raceLapTile strong, .raceLapTile small, .raceLapTile i {
+  position: relative;
+  z-index: 1;
+}
+.raceLapTile span {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 900;
+}
+.raceLapTile strong {
+  color: var(--yellow);
+  font-size: 15px;
+  line-height: 1.05;
+}
+.raceLapTile small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.18;
+}
+.raceLapTile i {
+  align-self: end;
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255,255,255,.10);
+}
+.raceLapTile i::before {
+  content: "";
+  display: block;
+  width: var(--control, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--red), var(--yellow), var(--green));
 }
 .raceTableWrap {
   height: calc(100% - 42px);
@@ -910,7 +1162,7 @@ canvas {
     grid-column: 1;
     grid-row: auto;
   }
-  .raceHero, .racePacePanel, .racePositionPanel, .powerPanel, .phasePanel, .sectorPanel, .funPanel, .riskPanel, .standoutPanel, .racePlanPanel, .raceTablePanel {
+  .raceHero, .racePacePanel, .racePositionPanel, .powerPanel, .phasePanel, .sectorPanel, .funPanel, .riskPanel, .standoutPanel, .racePlanPanel, .raceRibbonPanel, .raceTablePanel {
     grid-column: 1;
     grid-row: auto;
   }
@@ -929,7 +1181,10 @@ canvas {
   .reviewProfile {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  .lapList, .insights, .feed, .powerFactors, .racePhases, .raceSectors, .raceRisks, .raceStandouts, .racePlan, .raceFunStats {
+  .lapPulseStrip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .lapList, .insights, .feed, .powerFactors, .racePhases, .raceSectors, .raceRisks, .raceStandouts, .racePlan, .raceFunStats, .raceLapRibbon {
     height: auto;
     max-height: 340px;
   }
@@ -940,7 +1195,7 @@ canvas {
     max-height: 420px;
   }
   .circuitPanel { min-height: 560px; }
-  .tracePanel { min-height: 320px; }
+  .tracePanel { min-height: 240px; }
 }
 @media (max-width: 760px) {
   .heroBar {
@@ -973,6 +1228,9 @@ canvas {
     grid-template-columns: 1fr 1fr;
   }
   .raceSummary {
+    grid-template-columns: 1fr 1fr;
+  }
+  .raceStatusStrip, .lapPulseStrip {
     grid-template-columns: 1fr 1fr;
   }
   .scoreDial strong {
