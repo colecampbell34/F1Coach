@@ -343,7 +343,7 @@ class LapCoachTests(unittest.TestCase):
         self.assertEqual([lap.lap_num for lap in coach.completed_laps], [1, 2])
 
     def test_finished_result_status_completes_final_race_lap_without_rollover(self) -> None:
-        coach = LapCoach(sample_buckets=10)
+        coach = LapCoach(sample_buckets=10, driving_goal="race")
         coach.update(SessionInfo(self.header, 5000, 0, 10, 2, 0, 22, 30))
         coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
 
@@ -415,6 +415,76 @@ class LapCoachTests(unittest.TestCase):
         self.assertEqual(state["raceReview"]["summary"]["lapsRemaining"], 0)
         self.assertTrue(any("Race complete" in notice for notice in notices))
 
+    def test_inactive_race_final_lap_uses_late_samples_after_timer_reset(self) -> None:
+        coach = LapCoach(sample_buckets=10, driving_goal="race")
+        coach.update(SessionInfo(self.header, 5000, 0, 10, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
+
+        coach.update(self._lap(lap_num=1, current_ms=50_000, last_ms=0, distance=2500, car_position=1))
+        coach.update(self._lap(lap_num=2, current_ms=100, last_ms=90_000, distance=10, car_position=1))
+        coach.update(self._lap(lap_num=2, current_ms=45_000, last_ms=90_000, distance=2600, car_position=1))
+        coach.update(self._lap(lap_num=3, current_ms=100, last_ms=91_000, distance=10, driver_status=0, car_position=1))
+        coach.update(self._lap(lap_num=3, current_ms=45_000, last_ms=91_000, distance=2600, driver_status=0, car_position=1))
+        coach.update(
+            self._lap(
+                lap_num=3,
+                current_ms=86_000,
+                last_ms=91_000,
+                distance=4800,
+                s1=29_000,
+                s2=30_000,
+                driver_status=0,
+                car_position=1,
+            )
+        )
+        notices = coach.update(
+            self._lap(
+                lap_num=3,
+                current_ms=0,
+                last_ms=91_000,
+                distance=12,
+                s1=29_000,
+                s2=30_000,
+                driver_status=0,
+                result_status=2,
+                car_position=1,
+            )
+        )
+
+        self.assertEqual([lap.lap_num for lap in coach.completed_laps], [1, 2, 3])
+        self.assertEqual(coach.completed_laps[-1].lap_time_ms, 86_000)
+        self.assertGreater(len(coach.completed_laps[-1].samples), 1)
+        state = coach.snapshot()
+        self.assertTrue(state["session"]["raceFinished"])
+        self.assertEqual(state["raceReview"]["summary"]["totalLaps"], 3)
+        self.assertEqual(state["raceReview"]["summary"]["lapsRemaining"], 0)
+        self.assertTrue(any("Race complete" in notice for notice in notices))
+
+    def test_inactive_race_mid_final_lap_does_not_complete_without_finish_evidence(self) -> None:
+        coach = LapCoach(sample_buckets=10, driving_goal="race")
+        coach.update(SessionInfo(self.header, 5000, 0, 10, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
+
+        coach.update(self._lap(lap_num=1, current_ms=50_000, last_ms=0, distance=2500, car_position=1))
+        coach.update(self._lap(lap_num=2, current_ms=100, last_ms=90_000, distance=10, car_position=1))
+        coach.update(self._lap(lap_num=2, current_ms=45_000, last_ms=90_000, distance=2600, car_position=1))
+        coach.update(self._lap(lap_num=3, current_ms=100, last_ms=91_000, distance=10, car_position=1))
+        coach.update(self._lap(lap_num=3, current_ms=45_000, last_ms=91_000, distance=2600, car_position=1))
+        notices = coach.update(
+            self._lap(
+                lap_num=3,
+                current_ms=55_000,
+                last_ms=91_000,
+                distance=3000,
+                driver_status=0,
+                car_position=1,
+            )
+        )
+
+        self.assertEqual([lap.lap_num for lap in coach.completed_laps], [1, 2])
+        self.assertFalse(coach.race_finished)
+        self.assertFalse(any("Race complete" in notice for notice in notices))
+
     def test_race_position_loss_caps_power_ranking(self) -> None:
         coach = LapCoach(sample_buckets=30, driving_goal="race")
         coach.race_start_position = 1
@@ -437,6 +507,27 @@ class LapCoachTests(unittest.TestCase):
         self.assertLessEqual(review["powerRanking"]["score"], 6.5)
         position_factor = next(factor for factor in review["factors"] if factor["name"] == "Track Position")
         self.assertEqual(position_factor["positionsLost"], 2)
+
+    def test_held_podium_scores_as_strong_track_position_result(self) -> None:
+        coach = LapCoach(sample_buckets=30, driving_goal="race")
+        coach.race_start_position = 1
+        laps = [
+            CompletedLap(1, 90_000, 30_000, 30_000, False, self._piecewise_samples([30_000, 30_000, 30_000])),
+            CompletedLap(2, 89_800, 29_900, 29_900, False, self._piecewise_samples([29_900, 29_900, 30_000])),
+            CompletedLap(3, 89_900, 29_900, 30_000, False, self._piecewise_samples([29_900, 30_000, 30_000])),
+        ]
+        for lap in laps:
+            lap.race_position = 1
+        coach.completed_laps = laps
+        coach.clean_laps = laps
+        coach.best_lap = laps[1]
+
+        review = coach.snapshot()["raceReview"]
+
+        position_factor = next(factor for factor in review["factors"] if factor["name"] == "Track Position")
+        self.assertGreaterEqual(position_factor["score"], 8.5)
+        self.assertEqual(position_factor["podiumBonus"], 1.0)
+        self.assertGreaterEqual(review["powerRanking"]["score"], 8.0)
 
     def test_slip_reduces_race_control_and_tyre_energy_factors(self) -> None:
         coach = LapCoach(sample_buckets=30, driving_goal="race")
@@ -491,6 +582,67 @@ class LapCoachTests(unittest.TestCase):
         self.assertEqual(state["session"]["sessionTimeLeftS"], 0)
         self.assertEqual(state["completedLaps"][0]["lapTimeMs"], 91_200)
         self.assertTrue(any("Timed session complete" in notice for notice in notices))
+
+    def test_inactive_qualifying_finish_completes_lap_without_timer_packet(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.update(SessionInfo(self.header, 5000, 0, 10, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
+
+        coach.update(self._lap(lap_num=1, current_ms=50_000, last_ms=0, distance=2600, s1=29_000))
+        notices = coach.update(
+            self._lap(
+                lap_num=1,
+                current_ms=91_400,
+                last_ms=0,
+                distance=4995,
+                s1=29_000,
+                s2=30_000,
+                driver_status=0,
+                result_status=2,
+            )
+        )
+
+        self.assertEqual([lap.lap_num for lap in coach.completed_laps], [1])
+        self.assertEqual(coach.completed_laps[-1].lap_time_ms, 91_400)
+        self.assertIsNotNone(coach.best_lap)
+        self.assertTrue(any("Timed session complete" in notice for notice in notices))
+
+    def test_inactive_qualifying_lap_continues_after_timer_and_records_on_reset(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.update(SessionInfo(self.header, 5000, 0, 10, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
+
+        coach.update(self._lap(lap_num=1, current_ms=50_000, last_ms=0, distance=2600, s1=29_000))
+        coach.update(self._lap(lap_num=1, current_ms=86_000, last_ms=0, distance=4800, s1=29_000, s2=30_000, driver_status=0))
+        notices = coach.update(
+            self._lap(
+                lap_num=1,
+                current_ms=0,
+                last_ms=0,
+                distance=12,
+                s1=29_000,
+                s2=30_000,
+                driver_status=0,
+                result_status=2,
+            )
+        )
+
+        self.assertEqual([lap.lap_num for lap in coach.completed_laps], [1])
+        self.assertEqual(coach.completed_laps[-1].lap_time_ms, 86_000)
+        self.assertGreater(len(coach.completed_laps[-1].samples), 1)
+        self.assertIsNotNone(coach.best_lap)
+        self.assertTrue(any("Timed session complete" in notice for notice in notices))
+
+    def test_inactive_qualifying_mid_lap_does_not_complete_without_finish_evidence(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.update(SessionInfo(self.header, 5000, 0, 10, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
+
+        coach.update(self._lap(lap_num=1, current_ms=40_000, last_ms=0, distance=2100, s1=29_000))
+        notices = coach.update(self._lap(lap_num=1, current_ms=55_000, last_ms=0, distance=3000, s1=29_000, driver_status=0))
+
+        self.assertEqual(coach.completed_laps, [])
+        self.assertFalse(any("Timed session complete" in notice for notice in notices))
 
     def test_track_change_starts_new_session(self) -> None:
         coach = LapCoach(sample_buckets=10)

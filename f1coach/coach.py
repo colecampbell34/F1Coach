@@ -310,13 +310,20 @@ class LapCoach:
 
     def _update_lap(self, lap: LapSnapshot) -> list[str]:
         notices: list[str] = []
-        race_finished_packet = self._is_race_finished_packet(lap)
+        finished_result_packet = self._is_race_finished_packet(lap)
+        race_finished_packet = finished_result_packet and self.driving_goal == "race"
         race_distance_finished_packet = self._is_race_distance_finished_packet(lap)
+        race_continuation_packet = self._is_race_inactive_lap_packet(lap)
+        qualifying_finished_packet = self._is_qualifying_final_lap_packet(lap)
+        qualifying_continuation_packet = self._is_qualifying_inactive_lap_packet(lap)
         session_finished_packet = self._is_session_finished_packet(lap)
         if (
             lap.driver_status not in self.ACTIVE_DRIVER_STATUSES
             and not race_finished_packet
             and not race_distance_finished_packet
+            and not race_continuation_packet
+            and not qualifying_finished_packet
+            and not qualifying_continuation_packet
             and not session_finished_packet
         ):
             return notices
@@ -352,7 +359,7 @@ class LapCoach:
                 notices.append(hint)
         if race_finished_packet or race_distance_finished_packet:
             notices.extend(self._finalize_race_if_needed(lap))
-        elif session_finished_packet:
+        elif qualifying_finished_packet or session_finished_packet:
             notices.extend(self._finalize_timed_session_if_needed(lap))
         return notices
 
@@ -391,18 +398,122 @@ class LapCoach:
     def _is_race_finished_packet(self, lap: LapSnapshot) -> bool:
         return lap.result_status == self.RESULT_STATUS_FINISHED
 
+    def _is_qualifying_final_lap_packet(self, lap: LapSnapshot) -> bool:
+        if self.session_finalized or self.driving_goal != "qualifying" or self.active_lap_num is None:
+            return False
+        if self._is_race_finished_packet(lap):
+            return True
+        if lap.current_lap_num != self.active_lap_num and self._active_lap_has_timing_evidence(lap):
+            return self.session_expired or lap.driver_status not in self.ACTIVE_DRIVER_STATUSES
+        if lap.driver_status in self.ACTIVE_DRIVER_STATUSES:
+            return False
+        return self._has_finished_lap_time(lap)
+
+    def _is_qualifying_inactive_lap_packet(self, lap: LapSnapshot) -> bool:
+        if self.session_finalized or self.driving_goal != "qualifying" or self.active_lap_num is None:
+            return False
+        if lap.driver_status in self.ACTIVE_DRIVER_STATUSES:
+            return False
+        if lap.current_lap_num != self.active_lap_num:
+            return False
+        return lap.current_lap_time_ms > 0 or lap.lap_distance_m > 0
+
+    def _active_lap_has_timing_evidence(self, lap: LapSnapshot) -> bool:
+        latest_sample_ms = max((sample.lap_time_ms for sample in self.active_samples), default=0)
+        return lap.last_lap_time_ms > 0 or lap.current_lap_time_ms >= 10_000 or latest_sample_ms >= 10_000
+
+    def _has_finished_lap_time(self, lap: LapSnapshot) -> bool:
+        if lap.last_lap_time_ms > 0:
+            if not self.completed_laps or self.completed_laps[-1].lap_time_ms != lap.last_lap_time_ms:
+                return True
+        if self._lap_timer_or_distance_reset_after_active_lap(lap):
+            return True
+        if lap.current_lap_time_ms >= 10_000 and self._lap_distance_near_finish(lap):
+            return True
+        return False
+
+    def _lap_timer_or_distance_reset_after_active_lap(self, lap: LapSnapshot) -> bool:
+        latest_sample_ms = max((sample.lap_time_ms for sample in self.active_samples), default=0)
+        if latest_sample_ms < 10_000:
+            return False
+        if lap.current_lap_num != self.active_lap_num:
+            return True
+        if 0 <= lap.current_lap_time_ms <= 2_000 and latest_sample_ms - lap.current_lap_time_ms >= 5_000:
+            return True
+        if self.track_length_m is None or self.track_length_m <= 0:
+            return False
+        latest_distance = max((sample.lap_distance_m for sample in self.active_samples), default=0.0)
+        return latest_distance >= self.track_length_m - 250.0 and 0 <= lap.lap_distance_m <= 250.0
+
+    def _lap_distance_near_finish(self, lap: LapSnapshot) -> bool:
+        if self.track_length_m is None or self.track_length_m <= 0:
+            latest_distance = max((sample.lap_distance_m for sample in self.active_samples), default=0.0)
+            return max(lap.lap_distance_m, latest_distance) > 0 and lap.current_lap_time_ms >= 30_000
+        finish_threshold = max(0.0, self.track_length_m - 90.0)
+        latest_distance = max((sample.lap_distance_m for sample in self.active_samples), default=0.0)
+        return max(lap.lap_distance_m, latest_distance) >= finish_threshold
+
     def _is_race_distance_finished_packet(self, lap: LapSnapshot) -> bool:
         if self.race_finished or self.driving_goal != "race" or self.total_laps is None:
             return False
         if self.active_lap_num is None or len(self.completed_laps) >= self.total_laps:
             return False
-        if self.active_lap_num < self.total_laps and lap.current_lap_num <= self.total_laps:
+        if not self._active_race_lap_is_final_expected():
             return False
-        if self.active_lap_num > self.total_laps and lap.current_lap_num > self.total_laps:
-            return False
-        if lap.current_lap_num > self.total_laps or lap.driver_status not in self.ACTIVE_DRIVER_STATUSES:
-            return self._finished_lap_time_ms(lap) is not None
+        if lap.current_lap_num != self.active_lap_num and self._active_lap_has_timing_evidence(lap):
+            return True
+        if lap.driver_status not in self.ACTIVE_DRIVER_STATUSES:
+            return self._has_finished_race_lap_time(lap)
         return False
+
+    def _is_race_inactive_lap_packet(self, lap: LapSnapshot) -> bool:
+        if self.race_finished or self.driving_goal != "race" or self.total_laps is None:
+            return False
+        if self.active_lap_num is None or len(self.completed_laps) >= self.total_laps:
+            return False
+        if lap.driver_status in self.ACTIVE_DRIVER_STATUSES:
+            return False
+        if lap.current_lap_num < self.active_lap_num:
+            return False
+        final_window = (
+            self.active_lap_num >= max(1, self.total_laps - 1)
+            or lap.current_lap_num >= self.total_laps
+            or len(self.completed_laps) + 1 >= self.total_laps
+        )
+        if not final_window:
+            return False
+        return lap.current_lap_time_ms > 0 or lap.last_lap_time_ms > 0 or lap.lap_distance_m > 0
+
+    def _active_race_lap_is_final_expected(self) -> bool:
+        if self.total_laps is None or self.active_lap_num is None:
+            return False
+        if len(self.completed_laps) >= self.total_laps:
+            return False
+        return self.active_lap_num >= self.total_laps or len(self.completed_laps) + 1 >= self.total_laps
+
+    def _has_finished_race_lap_time(self, lap: LapSnapshot) -> bool:
+        if lap.last_lap_time_ms > 0:
+            if not self.completed_laps or self.completed_laps[-1].lap_time_ms != lap.last_lap_time_ms:
+                return True
+        if self._race_lap_timer_or_distance_reset_after_active_lap(lap):
+            return True
+        if lap.current_lap_time_ms >= 10_000 and self._lap_distance_near_finish(lap):
+            return True
+        return False
+
+    def _race_lap_timer_or_distance_reset_after_active_lap(self, lap: LapSnapshot) -> bool:
+        latest_sample_ms = max((sample.lap_time_ms for sample in self.active_samples), default=0)
+        if latest_sample_ms < 10_000:
+            return False
+        if lap.current_lap_num != self.active_lap_num:
+            return True
+        timer_reset = 0 <= lap.current_lap_time_ms <= 2_000 and latest_sample_ms - lap.current_lap_time_ms >= 5_000
+        if self.track_length_m is None or self.track_length_m <= 0:
+            return timer_reset and latest_sample_ms >= 30_000
+        latest_distance = max((sample.lap_distance_m for sample in self.active_samples), default=0.0)
+        near_finish = latest_distance >= self.track_length_m - 250.0
+        distance_reset = 0 <= lap.lap_distance_m <= 250.0
+        return near_finish and (timer_reset or distance_reset)
 
     def _record_race_start_position(self, lap: LapSnapshot) -> None:
         if self.race_start_position is not None or self.driving_goal != "race":
@@ -492,11 +603,14 @@ class LapCoach:
         if lap.current_lap_time_ms >= 10_000:
             return lap.current_lap_time_ms
         one_lap_remaining = self.total_laps is not None and len(self.completed_laps) < self.total_laps
-        if lap.last_lap_time_ms > 0 and one_lap_remaining:
+        duplicate_last_lap_time = (
+            lap.last_lap_time_ms > 0
+            and bool(self.completed_laps)
+            and self.completed_laps[-1].lap_time_ms == lap.last_lap_time_ms
+        )
+        if lap.last_lap_time_ms > 0 and one_lap_remaining and not duplicate_last_lap_time:
             return lap.last_lap_time_ms
-        if lap.last_lap_time_ms > 0 and self.completed_laps and self.completed_laps[-1].lap_time_ms == lap.last_lap_time_ms:
-            return None
-        if lap.last_lap_time_ms > 0:
+        if lap.last_lap_time_ms > 0 and not duplicate_last_lap_time:
             return lap.last_lap_time_ms
         if latest_sample_ms >= 10_000:
             return latest_sample_ms
@@ -2123,6 +2237,7 @@ class LapCoach:
         net_position_delta = position_summary.get("netPositionDelta")
         start_position = position_summary.get("startPosition")
         finish_position = position_summary.get("finishPosition")
+        podium_bonus = self._race_podium_bonus(position_summary)
 
         reference_detail = (
             f"best lap {self._signed_delta(best_delta_to_reference)} vs {reference.name}"
@@ -2135,6 +2250,7 @@ class LapCoach:
                 "score": position_score,
                 "weight": 0.44,
                 "positionsLost": max(0, -int(net_position_delta)) if net_position_delta is not None else 0,
+                "podiumBonus": podium_bonus,
                 "detail": (
                     f"Started P{start_position}, finished P{finish_position}; net {self._position_delta_label(int(net_position_delta))}."
                     if start_position is not None and finish_position is not None and net_position_delta is not None
@@ -2143,6 +2259,7 @@ class LapCoach:
                 "evidence": [
                     f"Best running spot P{position_summary['bestPosition']}" if position_summary.get("bestPosition") is not None else "Best position unknown",
                     f"Worst running spot P{position_summary['worstPosition']}" if position_summary.get("worstPosition") is not None else "Worst position unknown",
+                    f"Podium result bonus +{podium_bonus:.1f}" if podium_bonus > 0 else "No podium result bonus",
                 ],
             },
             {
@@ -2543,11 +2660,11 @@ class LapCoach:
         finish = int(finish_position)
         net = int(net_delta)
         if net >= 0:
-            score = 7.0 + net * 0.9
+            score = 7.2 + net * 0.9
             if finish <= 3:
-                score += 0.4
+                score += 0.6
             if start <= 3 and finish <= start:
-                score += 0.3
+                score += 0.7
         else:
             positions_lost = abs(net)
             score = 7.0 - positions_lost * 1.25
@@ -2556,6 +2673,19 @@ class LapCoach:
             if finish > 3:
                 score -= 0.4
         return self._clamp_score(score)
+
+    @staticmethod
+    def _race_podium_bonus(position_summary: dict[str, Any]) -> float:
+        start_position = position_summary.get("startPosition")
+        finish_position = position_summary.get("finishPosition")
+        net_delta = position_summary.get("netPositionDelta")
+        if start_position is None or finish_position is None or net_delta is None:
+            return 0.0
+        finish = int(finish_position)
+        net = int(net_delta)
+        if finish > 3 or net < 0:
+            return 0.0
+        return 1.0
 
     @staticmethod
     def _weighted_power_score(factors: list[dict[str, Any]]) -> float | None:
@@ -2570,6 +2700,9 @@ class LapCoach:
             positions_lost = int(position_factor.get("positionsLost") or 0)
             if positions_lost > 0:
                 score = min(score, max(4.0, 7.5 - positions_lost * 0.5))
+            podium_bonus = float(position_factor.get("podiumBonus") or 0.0)
+            if podium_bonus > 0:
+                score += podium_bonus
         return round(max(0.0, min(10.0, score)), 1)
 
     @staticmethod
