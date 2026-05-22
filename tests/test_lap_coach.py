@@ -180,6 +180,7 @@ class LapCoachTests(unittest.TestCase):
         for lap, position, fuel_kg in zip(laps, [8, 7, 6, 6, 5], [34.0, 32.6, 31.3, 30.0, 28.8]):
             lap.race_position = position
             lap.fuel_kg = fuel_kg
+        coach.race_start_position = 8
         coach.completed_laps = laps
         coach.clean_laps = [lap for lap in laps if not lap.invalid]
         coach.best_lap = laps[-1]
@@ -191,13 +192,17 @@ class LapCoachTests(unittest.TestCase):
         self.assertEqual(review["summary"]["scoredLaps"], 3)
         self.assertEqual(review["summary"]["invalidLaps"], 1)
         self.assertEqual(review["summary"]["bestLap"]["lapNum"], 5)
+        self.assertEqual(review["summary"]["startPosition"], 8)
+        self.assertEqual(review["summary"]["finishPosition"], 5)
+        self.assertEqual(review["summary"]["netPositionDelta"], 3)
         self.assertEqual(len(review["lapTable"]), 5)
         self.assertGreaterEqual(review["powerRanking"]["score"], 0)
         self.assertLessEqual(review["powerRanking"]["score"], 10)
         self.assertIn("Pace", {factor["name"] for factor in review["factors"]})
+        self.assertIn("Track Position", {factor["name"] for factor in review["factors"]})
         self.assertTrue(review["phaseBreakdown"])
         self.assertEqual([sector["sector"] for sector in review["sectorTrend"]], ["S1", "S2", "S3"])
-        self.assertEqual([point["position"] for point in review["trends"]["position"]], [8, 7, 6, 6, 5])
+        self.assertEqual([point["position"] for point in review["trends"]["position"]], [8, 8, 7, 6, 6, 5])
         self.assertTrue(review["trends"]["pace"])
         self.assertTrue(any(stat["label"] == "Positions" for stat in review["funStats"]))
         self.assertTrue(any(stat["label"] == "Fuel Burn" for stat in review["funStats"]))
@@ -378,6 +383,114 @@ class LapCoachTests(unittest.TestCase):
         self.assertEqual(state["raceReview"]["summary"]["totalLaps"], 2)
         self.assertEqual(state["raceReview"]["summary"]["expectedLaps"], 2)
         self.assertTrue(any("Race complete" in notice for notice in notices))
+
+    def test_race_distance_completes_final_sprint_lap_without_finished_status(self) -> None:
+        coach = LapCoach(sample_buckets=10, driving_goal="race")
+        coach.update(SessionInfo(self.header, 5000, 0, 10, 3, 0, 22, 30))
+        coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
+
+        coach.update(self._lap(lap_num=1, current_ms=50_000, last_ms=0, distance=2500, car_position=1))
+        coach.update(self._lap(lap_num=2, current_ms=100, last_ms=90_000, distance=10, car_position=2))
+        coach.update(self._lap(lap_num=2, current_ms=45_000, last_ms=90_000, distance=2600, car_position=2))
+        coach.update(self._lap(lap_num=3, current_ms=100, last_ms=91_000, distance=10, car_position=3))
+        coach.update(self._lap(lap_num=3, current_ms=45_000, last_ms=91_000, distance=2600, car_position=3))
+        notices = coach.update(
+            self._lap(
+                lap_num=3,
+                current_ms=0,
+                last_ms=92_000,
+                distance=5000,
+                driver_status=0,
+                result_status=2,
+                car_position=3,
+            )
+        )
+
+        self.assertEqual([lap.lap_num for lap in coach.completed_laps], [1, 2, 3])
+        self.assertEqual(coach.completed_laps[-1].lap_time_ms, 92_000)
+        state = coach.snapshot()
+        self.assertEqual(state["session"]["raceStartPosition"], 1)
+        self.assertTrue(state["session"]["raceFinished"])
+        self.assertEqual(state["raceReview"]["summary"]["totalLaps"], 3)
+        self.assertEqual(state["raceReview"]["summary"]["lapsRemaining"], 0)
+        self.assertTrue(any("Race complete" in notice for notice in notices))
+
+    def test_race_position_loss_caps_power_ranking(self) -> None:
+        coach = LapCoach(sample_buckets=30, driving_goal="race")
+        coach.race_start_position = 1
+        laps = [
+            CompletedLap(1, 90_000, 30_000, 30_000, False, self._piecewise_samples([30_000, 30_000, 30_000])),
+            CompletedLap(2, 89_800, 29_900, 29_900, False, self._piecewise_samples([29_900, 29_900, 30_000])),
+            CompletedLap(3, 89_900, 29_900, 30_000, False, self._piecewise_samples([29_900, 30_000, 30_000])),
+        ]
+        for lap, position in zip(laps, [2, 3, 3]):
+            lap.race_position = position
+        coach.completed_laps = laps
+        coach.clean_laps = laps
+        coach.best_lap = laps[1]
+
+        review = coach.snapshot()["raceReview"]
+
+        self.assertEqual(review["summary"]["startPosition"], 1)
+        self.assertEqual(review["summary"]["finishPosition"], 3)
+        self.assertEqual(review["summary"]["netPositionDelta"], -2)
+        self.assertLessEqual(review["powerRanking"]["score"], 6.5)
+        position_factor = next(factor for factor in review["factors"] if factor["name"] == "Track Position")
+        self.assertEqual(position_factor["positionsLost"], 2)
+
+    def test_slip_reduces_race_control_and_tyre_energy_factors(self) -> None:
+        coach = LapCoach(sample_buckets=30, driving_goal="race")
+        coach.race_start_position = 4
+        slippery_samples = [
+            self._sample(10_000, 0.10, 190, 0.80, 0.00, steer=0.20, slip=0.34),
+            self._sample(20_000, 0.25, 220, 0.95, 0.00, steer=0.10, slip=0.32),
+            self._sample(40_000, 0.55, 200, 0.85, 0.00, steer=0.24, slip=0.36),
+            self._sample(70_000, 0.85, 260, 1.00, 0.00, steer=0.05, slip=0.12),
+        ]
+        laps = [
+            CompletedLap(1, 91_000, 30_000, 30_000, False, slippery_samples),
+            CompletedLap(2, 90_700, 30_000, 30_000, False, slippery_samples),
+            CompletedLap(3, 90_900, 30_000, 30_000, False, slippery_samples),
+        ]
+        for lap in laps:
+            lap.race_position = 4
+        coach.completed_laps = laps
+        coach.clean_laps = laps
+        coach.best_lap = laps[1]
+
+        factors = {factor["name"]: factor for factor in coach.snapshot()["raceReview"]["factors"]}
+
+        self.assertLess(factors["Control"]["score"], 9.0)
+        self.assertLess(factors["Tyre and Energy"]["score"], 8.5)
+
+    def test_expired_qualifying_session_completes_final_lap_without_rollover(self) -> None:
+        coach = LapCoach(sample_buckets=10)
+        coach.update(SessionInfo(self.header, 5000, 0, 10, 3, 0, 22, 30, session_time_left_s=20))
+        coach.update(self._telemetry(speed=250, throttle=1.0, brake=0.0))
+
+        coach.update(self._lap(lap_num=1, current_ms=50_000, last_ms=0, distance=2600, s1=29_000))
+        coach.update(SessionInfo(self.header, 5000, 0, 10, 3, 0, 22, 30, session_time_left_s=0))
+        notices = coach.update(
+            self._lap(
+                lap_num=1,
+                current_ms=91_200,
+                last_ms=0,
+                distance=5000,
+                s1=29_000,
+                s2=30_000,
+                driver_status=0,
+                result_status=2,
+            )
+        )
+
+        self.assertEqual([lap.lap_num for lap in coach.completed_laps], [1])
+        self.assertEqual(coach.completed_laps[-1].lap_time_ms, 91_200)
+        self.assertIsNotNone(coach.best_lap)
+        state = coach.snapshot()
+        self.assertTrue(state["session"]["sessionExpired"])
+        self.assertEqual(state["session"]["sessionTimeLeftS"], 0)
+        self.assertEqual(state["completedLaps"][0]["lapTimeMs"], 91_200)
+        self.assertTrue(any("Timed session complete" in notice for notice in notices))
 
     def test_track_change_starts_new_session(self) -> None:
         coach = LapCoach(sample_buckets=10)
@@ -719,6 +832,7 @@ class LapCoachTests(unittest.TestCase):
         s2: int = 30_000,
         driver_status: int = 1,
         result_status: int = 2,
+        car_position: int = 1,
     ) -> LapSnapshot:
         return LapSnapshot(
             header=self.header,
@@ -729,7 +843,7 @@ class LapCoachTests(unittest.TestCase):
             sector2_time_ms=s2,
             lap_distance_m=distance,
             total_distance_m=distance,
-            car_position=1,
+            car_position=car_position,
             current_lap_num=lap_num,
             sector=0,
             current_lap_invalid=invalid,

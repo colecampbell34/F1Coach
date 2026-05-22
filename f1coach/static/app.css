@@ -140,6 +140,48 @@ button.active {
 .heroControls [hidden] {
   display: none !important;
 }
+.capturePill {
+  min-height: 34px;
+  display: inline-grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0,0,0,.26);
+}
+.capturePill span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--quiet);
+  box-shadow: 0 0 0 4px rgba(129,120,142,.15);
+}
+.capturePill strong {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.capturePill.connected {
+  border-color: rgba(63,240,154,.45);
+  background: rgba(63,240,154,.10);
+}
+.capturePill.connected span {
+  background: var(--green);
+  box-shadow: 0 0 0 4px rgba(63,240,154,.18), 0 0 18px rgba(63,240,154,.45);
+}
+.capturePill.connected strong { color: var(--green); }
+.capturePill.paused {
+  border-color: rgba(255,209,102,.45);
+  background: rgba(255,209,102,.10);
+}
+.capturePill.paused span {
+  background: var(--yellow);
+  box-shadow: 0 0 0 4px rgba(255,209,102,.18);
+}
+.capturePill.paused strong { color: var(--yellow); }
 .dashboardNav {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -370,24 +412,16 @@ button.active {
 }
 .lapShelf {
   grid-column: 2;
-  grid-row: 3;
+  grid-row: 3 / span 2;
 }
 .notesPanel {
   grid-column: 3;
-  grid-row: 3;
+  grid-row: 3 / span 2;
   min-height: 0;
 }
-.linkPanel {
-  grid-column: 2 / span 2;
-  grid-row: 4;
-  min-height: 0;
-}
-.circuitPanel, .tracePanel, .focusPanel, .lapShelf, .notesPanel, .linkPanel {
+.circuitPanel, .tracePanel, .focusPanel, .lapShelf, .notesPanel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-}
-.linkPanel {
-  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 .circuitPanel canvas { min-height: 500px; }
 .tracePanel canvas { min-height: 130px; }
@@ -427,7 +461,7 @@ canvas {
 .speedLine { background: var(--yellow); }
 .throttleLine { background: var(--green); }
 .brakeLine { background: var(--red); }
-.lapList, .insights, .feed, .packetMix {
+.lapList, .insights, .feed {
   min-height: 0;
   height: 100%;
   overflow: auto;
@@ -496,8 +530,7 @@ canvas {
   display: grid;
   align-content: start;
   gap: 4px;
-  max-height: 150px;
-  overflow: auto;
+  overflow: visible;
   padding: 7px;
   border: 1px solid var(--line);
   border-left: 5px solid var(--orange);
@@ -549,86 +582,6 @@ canvas {
   background: rgba(255,255,255,.03);
 }
 .feed.compact div { color: var(--muted); }
-.statusLamp {
-  width: 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-}
-.statusLamp span {
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: var(--quiet);
-  box-shadow: 0 0 0 4px rgba(129,120,142,.16);
-}
-.statusLamp.connected span {
-  background: var(--green);
-  box-shadow: 0 0 0 4px rgba(63,240,154,.17);
-}
-.statusLamp.paused span {
-  background: var(--yellow);
-  box-shadow: 0 0 0 4px rgba(255,209,102,.18);
-}
-.linkBody {
-  display: grid;
-  gap: 5px;
-  padding: 6px 8px 0;
-  font-size: 12px;
-}
-.packetMix {
-  height: auto;
-  padding-top: 10px;
-}
-.diagnostics {
-  display: grid;
-  gap: 6px;
-  max-height: 150px;
-  overflow: auto;
-  padding: 6px;
-}
-.diagnostic {
-  display: grid;
-  gap: 2px;
-  padding: 6px;
-  border: 1px solid var(--line);
-  border-left: 4px solid var(--quiet);
-  border-radius: 8px;
-  background: var(--surface-2);
-  font-size: 12px;
-  line-height: 1.28;
-}
-.diagnostic.ok { border-left-color: var(--green); }
-.diagnostic.info { border-left-color: var(--cyan); }
-.diagnostic.warning, .diagnostic.waiting { border-left-color: var(--yellow); }
-.diagnostic.error { border-left-color: var(--red); }
-.diagnostic strong { color: var(--text); }
-.diagnostic span { color: var(--muted); }
-.diagnostic small {
-  color: var(--cyan);
-  font-size: 11px;
-  line-height: 1.25;
-}
-.packetRow {
-  display: grid;
-  grid-template-columns: 90px minmax(0, 1fr) 42px;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-}
-.packetBar {
-  height: 8px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(255,255,255,.08);
-}
-.packetBar i {
-  display: block;
-  height: 100%;
-  width: 0%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--red), var(--yellow), var(--cyan));
-}
 .raceGrid {
   min-height: 0;
   min-height: 1320px;
@@ -1158,7 +1111,7 @@ canvas {
     grid-template-columns: 1fr;
     grid-template-rows: none;
   }
-  .reviewHero, .lapShelf, .circuitPanel, .focusPanel, .tracePanel, .notesPanel, .linkPanel {
+  .reviewHero, .lapShelf, .circuitPanel, .focusPanel, .tracePanel, .notesPanel {
     grid-column: 1;
     grid-row: auto;
   }
@@ -1209,6 +1162,9 @@ canvas {
   }
   .heroControls > button, .goalToggle, .dashboardNav {
     flex: 1 1 150px;
+  }
+  .capturePill {
+    flex: 0 0 auto;
   }
   .reviewGrid {
     padding: 10px;

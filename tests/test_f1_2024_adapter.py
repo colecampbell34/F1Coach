@@ -31,6 +31,7 @@ class F124AdapterTests(unittest.TestCase):
         self.assertEqual(message.track_length_m, 5412)
         self.assertEqual(message.track_id, 7)
         self.assertEqual(message.air_temperature_c, 24)
+        self.assertEqual(message.session_time_left_s, 600)
 
     def test_decodes_session_safety_car_status_when_available(self) -> None:
         payload = (

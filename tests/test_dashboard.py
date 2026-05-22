@@ -124,14 +124,15 @@ class TelemetryRuntimeTests(unittest.TestCase):
         self.assertIn("Race Overview", index)
         self.assertIn("Position History", index)
         self.assertIn("Run Signals", index)
+        self.assertIn("capturePill", index)
+        self.assertNotIn("Telemetry Link", index)
         self.assertNotIn("Fun Stats", index)
         self.assertNotIn("Setup Signals", index)
         self.assertNotIn("data-view", index)
-        self.assertIn("diagnostics", index)
         self.assertIn(".appShell", css)
         self.assertIn("function renderReviewHero", js)
         self.assertIn("function renderRaceReview", js)
-        self.assertIn("function renderDiagnostics", js)
+        self.assertNotIn("function renderDiagnostics", js)
 
 
 if __name__ == "__main__":

@@ -156,10 +156,14 @@ class LapCoach:
         self.track_id: int | None = None
         self.session_type: int | None = None
         self.total_laps: int | None = None
+        self.session_time_left_s: int | None = None
+        self.session_expired = False
+        self.session_finalized = False
         self.safety_car_status = 0
         self.latest_result_status: int | None = None
         self.race_finished = False
         self.race_finished_lap_num: int | None = None
+        self.race_start_position: int | None = None
         self.latest_telemetry: CarTelemetrySnapshot | None = None
         self.latest_status: CarStatusSnapshot | None = None
         self.latest_motion: MotionSnapshot | None = None
@@ -209,10 +213,14 @@ class LapCoach:
         self.track_id = track_id
         self.session_type = session_type
         self.total_laps = total_laps
+        self.session_time_left_s = None
+        self.session_expired = False
+        self.session_finalized = False
         self.safety_car_status = 0
         self.latest_result_status = None
         self.race_finished = False
         self.race_finished_lap_num = None
+        self.race_start_position = None
         self.latest_telemetry = None
         self.latest_status = None
         self.latest_motion = None
@@ -260,6 +268,12 @@ class LapCoach:
         notices: list[str] = []
         self.session_type = message.session_type
         self.safety_car_status = message.safety_car_status
+        self.session_time_left_s = message.session_time_left_s
+        if message.session_time_left_s == 0:
+            self.session_expired = True
+        elif message.session_time_left_s is not None and message.session_time_left_s > 0:
+            self.session_expired = False
+            self.session_finalized = False
         incoming_total_laps = message.total_laps if message.total_laps > 0 else None
         track_changed = (
             self.track_length_m is not None
@@ -297,10 +311,18 @@ class LapCoach:
     def _update_lap(self, lap: LapSnapshot) -> list[str]:
         notices: list[str] = []
         race_finished_packet = self._is_race_finished_packet(lap)
-        if lap.driver_status not in self.ACTIVE_DRIVER_STATUSES and not race_finished_packet:
+        race_distance_finished_packet = self._is_race_distance_finished_packet(lap)
+        session_finished_packet = self._is_session_finished_packet(lap)
+        if (
+            lap.driver_status not in self.ACTIVE_DRIVER_STATUSES
+            and not race_finished_packet
+            and not race_distance_finished_packet
+            and not session_finished_packet
+        ):
             return notices
         self.latest_lap = lap
         self.latest_result_status = lap.result_status
+        self._record_race_start_position(lap)
 
         if self.active_lap_num is None:
             self.active_lap_num = lap.current_lap_num
@@ -328,8 +350,10 @@ class LapCoach:
             hint = self._live_hint(sample)
             if hint is not None:
                 notices.append(hint)
-        if race_finished_packet:
+        if race_finished_packet or race_distance_finished_packet:
             notices.extend(self._finalize_race_if_needed(lap))
+        elif session_finished_packet:
+            notices.extend(self._finalize_timed_session_if_needed(lap))
         return notices
 
     def _complete_lap(self, new_lap_snapshot: LapSnapshot) -> CompletedLap | None:
@@ -367,20 +391,83 @@ class LapCoach:
     def _is_race_finished_packet(self, lap: LapSnapshot) -> bool:
         return lap.result_status == self.RESULT_STATUS_FINISHED
 
+    def _is_race_distance_finished_packet(self, lap: LapSnapshot) -> bool:
+        if self.race_finished or self.driving_goal != "race" or self.total_laps is None:
+            return False
+        if self.active_lap_num is None or len(self.completed_laps) >= self.total_laps:
+            return False
+        if self.active_lap_num < self.total_laps and lap.current_lap_num <= self.total_laps:
+            return False
+        if self.active_lap_num > self.total_laps and lap.current_lap_num > self.total_laps:
+            return False
+        if lap.current_lap_num > self.total_laps or lap.driver_status not in self.ACTIVE_DRIVER_STATUSES:
+            return self._finished_lap_time_ms(lap) is not None
+        return False
+
+    def _record_race_start_position(self, lap: LapSnapshot) -> None:
+        if self.race_start_position is not None or self.driving_goal != "race":
+            return
+        if lap.car_position <= 0:
+            return
+        if self.total_laps is not None and lap.current_lap_num > max(1, self.total_laps):
+            return
+        self.race_start_position = lap.car_position
+
+    def _is_session_finished_packet(self, lap: LapSnapshot) -> bool:
+        if self.session_finalized or not self.session_expired:
+            return False
+        if self._is_race_finished_packet(lap):
+            return True
+        if lap.driver_status not in self.ACTIVE_DRIVER_STATUSES:
+            return self.active_lap_num is not None
+        return (
+            self.active_lap_num is not None
+            and lap.current_lap_num != self.active_lap_num
+            and lap.last_lap_time_ms > 0
+        )
+
+    def _finalize_timed_session_if_needed(self, lap: LapSnapshot) -> list[str]:
+        if self.session_finalized:
+            return []
+        if self.active_lap_num is None:
+            self.session_finalized = True
+            return self._timed_session_finished_notice()
+
+        final_lap_time_ms = self._finished_lap_time_ms(lap)
+        if final_lap_time_ms is None:
+            if self.completed_laps and lap.last_lap_time_ms == self.completed_laps[-1].lap_time_ms:
+                self.session_finalized = True
+                return self._timed_session_finished_notice()
+            return []
+
+        completed = self._build_completed_lap(final_lap_time_ms, lap)
+        notices = self._record_completed_lap(completed)
+        self.active_lap_num = None
+        self._reset_active_lap_state()
+        self.active_sector1_time_ms = 0
+        self.active_sector2_time_ms = 0
+        self.active_samples = []
+        self.session_finalized = True
+        notices.extend(self._timed_session_finished_notice())
+        return notices
+
     def _finalize_race_if_needed(self, lap: LapSnapshot) -> list[str]:
         if self.race_finished:
             return []
-        self.race_finished = True
-        self.race_finished_lap_num = self.completed_laps[-1].lap_num if self.completed_laps else None
         if not self._should_finalize_active_race_lap(lap):
+            if self.total_laps is not None and len(self.completed_laps) < self.total_laps and self.active_lap_num is not None:
+                return []
+            self.race_finished = True
+            self.race_finished_lap_num = self.completed_laps[-1].lap_num if self.completed_laps else None
             return self._race_finished_notice()
 
         final_lap_time_ms = self._finished_lap_time_ms(lap)
         if final_lap_time_ms is None:
-            return self._race_finished_notice()
+            return []
 
         completed = self._build_completed_lap(final_lap_time_ms, lap)
         notices = self._record_completed_lap(completed)
+        self.race_finished = True
         self.race_finished_lap_num = completed.lap_num
         self.active_lap_num = None
         self._reset_active_lap_state()
@@ -419,6 +506,10 @@ class LapCoach:
         lap_count = len(self.completed_laps)
         expected = f"/{self.total_laps}" if self.total_laps is not None else ""
         return [f"Race complete: {lap_count}{expected} laps captured. Race Overview finalized."]
+
+    def _timed_session_finished_notice(self) -> list[str]:
+        lap_count = len(self.completed_laps)
+        return [f"Timed session complete: {lap_count} laps captured."]
 
     def _reset_active_lap_state(self) -> None:
         self.active_invalid = False
@@ -1379,6 +1470,9 @@ class LapCoach:
                 "trackLengthM": self.track_length_m,
                 "sessionType": self.session_type,
                 "totalLaps": self.total_laps,
+                "sessionTimeLeftS": self.session_time_left_s,
+                "sessionExpired": self.session_expired,
+                "raceStartPosition": self.race_start_position,
                 "safetyCarStatus": self.safety_car_status,
                 "resultStatus": self.latest_result_status,
                 "raceFinished": self.race_finished,
@@ -1490,6 +1584,9 @@ class LapCoach:
                     "expectedLaps": self.total_laps,
                     "lapsRemaining": self.total_laps,
                     "raceComplete": self.race_finished,
+                    "startPosition": self.race_start_position,
+                    "finishPosition": None,
+                    "netPositionDelta": None,
                     "cleanLaps": 0,
                     "invalidLaps": 0,
                     "raceTime": "--",
@@ -1516,6 +1613,7 @@ class LapCoach:
             }
 
         rows = self._race_lap_rows(laps, reference)
+        position_summary = self._race_position_summary(rows)
         clean_laps = [lap for lap in laps if not lap.invalid]
         scored_lap_nums = {row["lapNum"] for row in rows if row.get("rankingEligible")}
         scored_laps = [lap for lap in laps if lap.lap_num in scored_lap_nums]
@@ -1553,6 +1651,7 @@ class LapCoach:
             volatility_ms,
             trend_ms,
             longest_scored_streak,
+            position_summary,
         )
         score = self._weighted_power_score(factors)
         label = self._power_label(score)
@@ -1560,7 +1659,7 @@ class LapCoach:
         risk_register = self._race_risk_register(rows, scored_laps, stdev_ms, volatility_ms, trend_ms)
         recommendations = self._race_recommendations(factors, risk_register, phases, reference)
         trends = self._race_trends(rows)
-        fun_stats = self._race_fun_stats(rows, phases, longest_scored_streak)
+        fun_stats = self._race_fun_stats(rows, phases, longest_scored_streak, position_summary)
 
         return {
             "status": "complete" if self.race_finished else "ready" if scored_laps else "needs-representative-lap",
@@ -1569,6 +1668,9 @@ class LapCoach:
                 "expectedLaps": self.total_laps,
                 "lapsRemaining": max(0, self.total_laps - len(laps)) if self.total_laps is not None else None,
                 "raceComplete": self.race_finished,
+                "startPosition": position_summary.get("startPosition"),
+                "finishPosition": position_summary.get("finishPosition"),
+                "netPositionDelta": position_summary.get("netPositionDelta"),
                 "cleanLaps": len(clean_laps),
                 "scoredLaps": len(scored_laps),
                 "excludedLaps": len(laps) - len(scored_laps),
@@ -1650,6 +1752,7 @@ class LapCoach:
                 "overlapPct": overview.get("brakeThrottleOverlapPct"),
                 "steeringThrottlePct": overview.get("steeringThrottlePct"),
                 "highSlipPct": overview.get("highSlipPct"),
+                "avgSlipRatio": overview.get("avgSlipRatio"),
                 "ersUsedKj": self._lap_ers_used_kj(lap),
                 "fuelKg": round(lap.fuel_kg, 2) if lap.fuel_kg is not None else None,
                 "fuelRemainingLaps": round(lap.fuel_remaining_laps, 2)
@@ -1679,6 +1782,15 @@ class LapCoach:
 
     def _race_trends(self, rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
         trends = self._empty_race_trends()
+        if self.race_start_position is not None:
+            trends["position"].append(
+                {
+                    "lapNum": 0,
+                    "position": self.race_start_position,
+                    "rankingEligible": False,
+                    "label": "Start",
+                }
+            )
         for row in rows:
             lap_num = row["lapNum"]
             trends["pace"].append(
@@ -1704,6 +1816,7 @@ class LapCoach:
                     "lapNum": lap_num,
                     "controlScore": row.get("controlScore"),
                     "highSlipPct": row.get("highSlipPct"),
+                    "avgSlipRatio": row.get("avgSlipRatio"),
                     "overlapPct": row.get("overlapPct"),
                     "steeringThrottlePct": row.get("steeringThrottlePct"),
                 }
@@ -1719,20 +1832,59 @@ class LapCoach:
             )
         return trends
 
+    def _race_position_summary(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        position_rows = [row for row in rows if row.get("position") is not None]
+        if not position_rows and self.race_start_position is None:
+            return {
+                "startPosition": None,
+                "finishPosition": None,
+                "bestPosition": None,
+                "worstPosition": None,
+                "netPositionDelta": None,
+                "positionRows": [],
+            }
+        start_position = self.race_start_position
+        if start_position is None and position_rows:
+            start_position = int(position_rows[0]["position"])
+        finish_position = int(position_rows[-1]["position"]) if position_rows else start_position
+        positions = [int(row["position"]) for row in position_rows]
+        if start_position is not None:
+            positions.append(int(start_position))
+        best_position = min(positions) if positions else None
+        worst_position = max(positions) if positions else None
+        net_delta = (
+            int(start_position) - int(finish_position)
+            if start_position is not None and finish_position is not None
+            else None
+        )
+        synthetic_rows: list[dict[str, Any]] = []
+        if self.race_start_position is not None:
+            synthetic_rows.append({"lapNum": 0, "position": self.race_start_position, "label": "Start"})
+        synthetic_rows.extend(position_rows)
+        return {
+            "startPosition": start_position,
+            "finishPosition": finish_position,
+            "bestPosition": best_position,
+            "worstPosition": worst_position,
+            "netPositionDelta": net_delta,
+            "positionRows": synthetic_rows,
+        }
+
     def _race_fun_stats(
         self,
         rows: list[dict[str, Any]],
         phases: list[dict[str, Any]],
         longest_scored_streak: int,
+        position_summary: dict[str, Any],
     ) -> list[dict[str, Any]]:
         stats: list[dict[str, Any]] = []
-        position_rows = [row for row in rows if row.get("position") is not None]
-        if position_rows:
-            start_position = int(position_rows[0]["position"])
-            finish_position = int(position_rows[-1]["position"])
-            best_position = min(int(row["position"]) for row in position_rows)
-            worst_position = max(int(row["position"]) for row in position_rows)
-            net_gain = start_position - finish_position
+        position_rows = position_summary.get("positionRows") or []
+        if position_summary.get("startPosition") is not None and position_summary.get("finishPosition") is not None:
+            start_position = int(position_summary["startPosition"])
+            finish_position = int(position_summary["finishPosition"])
+            best_position = int(position_summary["bestPosition"])
+            worst_position = int(position_summary["worstPosition"])
+            net_gain = int(position_summary["netPositionDelta"])
             stats.append(
                 {
                     "label": "Positions",
@@ -1827,10 +1979,12 @@ class LapCoach:
         if best is None:
             return None
         gain, previous, current = best
+        previous_label = "Start" if int(previous["lapNum"]) == 0 else f"Lap {previous['lapNum']}"
+        current_label = f"lap {current['lapNum']}" if int(current["lapNum"]) != 0 else "start"
         return {
             "label": "Best Position Jump",
             "value": f"+{gain}",
-            "detail": f"Lap {previous['lapNum']} to {current['lapNum']}: P{previous['position']} to P{current['position']}.",
+            "detail": f"{previous_label} to {current_label}: P{previous['position']} to P{current['position']}.",
             "tone": "gain",
         }
 
@@ -1880,6 +2034,7 @@ class LapCoach:
         volatility_ms: int | None,
         trend_ms: int | None,
         longest_scored_streak: int,
+        position_summary: dict[str, Any],
     ) -> list[dict[str, Any]]:
         if not scored_laps:
             return [
@@ -1924,20 +2079,37 @@ class LapCoach:
         avg_control = self._avg(control_values) if control_values else 0.0
         penalty_base = len(scored_rows) + len(penalty_rows)
         penalty_ratio = len(penalty_rows) / penalty_base if penalty_base else 0.0
-        control_score = self._clamp_score(avg_control / 10 - penalty_ratio * 3.0)
-
         high_slip = self._avg(
             float(row["highSlipPct"] or 0)
             for row in scored_rows
             if row.get("highSlipPct") is not None
+        )
+        avg_slip_ratio = self._avg(
+            float(row["avgSlipRatio"] or 0)
+            for row in scored_rows
+            if row.get("avgSlipRatio") is not None
         )
         steering_throttle = self._avg(
             float(row["steeringThrottlePct"] or 0) for row in scored_rows
         )
         overlap = self._avg(float(row["overlapPct"] or 0) for row in scored_rows)
         trend_penalty = max(0, (trend_ms or 0) - 1500) / 800
+        slip_ratio_penalty = max(0.0, avg_slip_ratio - 0.18) * 16.0
+        control_score = self._clamp_score(
+            avg_control / 10
+            - penalty_ratio * 3.0
+            - high_slip * 0.08
+            - steering_throttle * 0.03
+            - overlap * 0.04
+            - slip_ratio_penalty * 0.45
+        )
         tyre_energy_score = self._clamp_score(
-            10.0 - high_slip * 0.12 - steering_throttle * 0.08 - overlap * 0.10 - trend_penalty
+            10.0
+            - high_slip * 0.28
+            - steering_throttle * 0.12
+            - overlap * 0.14
+            - slip_ratio_penalty
+            - trend_penalty
         )
 
         representative_base = len(scored_rows) + len(penalty_rows)
@@ -1947,6 +2119,10 @@ class LapCoach:
         if trend_ms is not None:
             trend_score = 10.0 - max(0, trend_ms) / 1000 + max(0, -trend_ms) / 2500
         execution_score = self._clamp_score((valid_pct / 10) * 0.48 + streak_score * 0.32 + trend_score * 0.20)
+        position_score = self._race_position_score(position_summary)
+        net_position_delta = position_summary.get("netPositionDelta")
+        start_position = position_summary.get("startPosition")
+        finish_position = position_summary.get("finishPosition")
 
         reference_detail = (
             f"best lap {self._signed_delta(best_delta_to_reference)} vs {reference.name}"
@@ -1955,9 +2131,24 @@ class LapCoach:
         )
         return [
             {
+                "name": "Track Position",
+                "score": position_score,
+                "weight": 0.44,
+                "positionsLost": max(0, -int(net_position_delta)) if net_position_delta is not None else 0,
+                "detail": (
+                    f"Started P{start_position}, finished P{finish_position}; net {self._position_delta_label(int(net_position_delta))}."
+                    if start_position is not None and finish_position is not None and net_position_delta is not None
+                    else "No reliable start and finish position telemetry was available."
+                ),
+                "evidence": [
+                    f"Best running spot P{position_summary['bestPosition']}" if position_summary.get("bestPosition") is not None else "Best position unknown",
+                    f"Worst running spot P{position_summary['worstPosition']}" if position_summary.get("worstPosition") is not None else "Worst position unknown",
+                ],
+            },
+            {
                 "name": "Pace",
                 "score": pace_score,
-                "weight": 0.32,
+                "weight": 0.16,
                 "detail": f"{reference_detail}; average representative lap is {self._format_delta(avg_delta_to_best or 0)} off your race best.",
                 "evidence": [
                     f"Best lap {best_lap.lap_num}: {self._format_ms(best_lap.lap_time_ms)}",
@@ -1968,7 +2159,7 @@ class LapCoach:
             {
                 "name": "Consistency",
                 "score": consistency_score,
-                "weight": 0.24,
+                "weight": 0.12,
                 "detail": "Rewards repeatable lap time without large lap-to-lap spikes.",
                 "evidence": [
                     f"Stdev {stdev_ms / 1000:.2f}s" if stdev_ms is not None else "Need more clean laps",
@@ -1978,20 +2169,22 @@ class LapCoach:
             {
                 "name": "Control",
                 "score": control_score,
-                "weight": 0.22,
+                "weight": 0.10,
                 "detail": "Combines input quality, invalid laps, overlap, and traction stability.",
                 "evidence": [
                     f"Average control {avg_control:.0f}/100",
+                    f"High-slip samples {high_slip:.1f}%",
                     f"{len(penalty_rows)} driver/error laps counted as penalties",
                 ],
             },
             {
                 "name": "Tyre and Energy",
                 "score": tyre_energy_score,
-                "weight": 0.12,
+                "weight": 0.10,
                 "detail": "Looks for slip, throttle-with-lock, pedal overlap, and late-run degradation.",
                 "evidence": [
                     f"High-slip samples {high_slip:.1f}%",
+                    f"Average slip ratio {avg_slip_ratio:.2f}",
                     f"Throttle with steering {steering_throttle:.1f}%",
                     f"Pedal overlap {overlap:.1f}%",
                 ],
@@ -1999,7 +2192,7 @@ class LapCoach:
             {
                 "name": "Race Execution",
                 "score": execution_score,
-                "weight": 0.10,
+                "weight": 0.08,
                 "detail": "Scores representative green-flag streaks, finish trend, and avoidable lap exclusions.",
                 "evidence": [
                     f"{valid_pct:.1f}% representative laps",
@@ -2240,11 +2433,11 @@ class LapCoach:
             float(row["highSlipPct"] or 0) for row in reviewable if row.get("highSlipPct") is not None
         ]
         avg_high_slip = self._avg(high_slip_values)
-        if high_slip_values and avg_high_slip >= 7.0:
+        if high_slip_values and avg_high_slip >= 4.0:
             risks.append(
                 {
                     "title": "Rear traction life",
-                    "severity": "medium",
+                    "severity": "high" if avg_high_slip >= 9.0 else "medium",
                     "detail": f"High-slip traction samples average {avg_high_slip:.1f}%.",
                     "action": "Delay full throttle until steering lock is unwinding, especially late stint.",
                 }
@@ -2298,7 +2491,9 @@ class LapCoach:
             return ["Complete clean laps to unlock a race plan."]
         weakest = min(factors, key=lambda factor: float(factor["score"]))
         recommendations: list[str] = []
-        if weakest["name"] == "Pace":
+        if weakest["name"] == "Track Position":
+            recommendations.append("Treat position loss as the main race limiter: review starts, defense, and the laps where places were lost before chasing pace score.")
+        elif weakest["name"] == "Pace":
             if reference is not None:
                 recommendations.append(f"Use the lap review map against {reference.name} and fix the largest two loss zones first.")
             else:
@@ -2338,6 +2533,30 @@ class LapCoach:
             "deltaToReferenceMs": lap.lap_time_ms - reference.lap_time_ms if reference is not None else None,
         }
 
+    def _race_position_score(self, position_summary: dict[str, Any]) -> float:
+        start_position = position_summary.get("startPosition")
+        finish_position = position_summary.get("finishPosition")
+        net_delta = position_summary.get("netPositionDelta")
+        if start_position is None or finish_position is None or net_delta is None:
+            return 5.5
+        start = int(start_position)
+        finish = int(finish_position)
+        net = int(net_delta)
+        if net >= 0:
+            score = 7.0 + net * 0.9
+            if finish <= 3:
+                score += 0.4
+            if start <= 3 and finish <= start:
+                score += 0.3
+        else:
+            positions_lost = abs(net)
+            score = 7.0 - positions_lost * 1.25
+            if start <= 3:
+                score -= positions_lost * 0.45
+            if finish > 3:
+                score -= 0.4
+        return self._clamp_score(score)
+
     @staticmethod
     def _weighted_power_score(factors: list[dict[str, Any]]) -> float | None:
         if not factors:
@@ -2346,6 +2565,11 @@ class LapCoach:
         if total_weight <= 0:
             return None
         score = sum(float(factor["score"]) * float(factor.get("weight", 0.0)) for factor in factors) / total_weight
+        position_factor = next((factor for factor in factors if factor.get("name") == "Track Position"), None)
+        if position_factor is not None:
+            positions_lost = int(position_factor.get("positionsLost") or 0)
+            if positions_lost > 0:
+                score = min(score, max(4.0, 7.5 - positions_lost * 0.5))
         return round(max(0.0, min(10.0, score)), 1)
 
     @staticmethod

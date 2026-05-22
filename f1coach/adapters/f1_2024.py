@@ -111,6 +111,7 @@ class F124Adapter:
             air_temperature_c=air_temperature_c,
             track_temperature_c=track_temperature_c,
             safety_car_status=safety_car_status,
+            session_time_left_s=_session_time_left,
         )
 
     def _decode_lap_data(self, packet: bytes, header: PacketHeader) -> LapSnapshot:

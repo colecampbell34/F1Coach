@@ -29,6 +29,10 @@
           <button data-goal="qualifying" type="button">Quali Pace</button>
           <button data-goal="race" type="button">Race Pace</button>
         </div>
+        <div id="capturePill" class="capturePill" title="Telemetry capture status">
+          <span></span>
+          <strong id="captureLabel">Idle</strong>
+        </div>
         <button id="pauseButton" type="button">Pause Capture</button>
         <button id="newSessionButton" type="button">New Session</button>
       </div>
@@ -124,22 +128,6 @@
         <div id="notices" class="feed"></div>
       </section>
 
-      <section class="linkPanel panel">
-        <div class="panelHeader">
-          <div>
-            <span class="eyebrow">Telemetry Link</span>
-            <h2 id="connectionLabel">No packets</h2>
-          </div>
-          <div class="statusLamp" id="connectionLamp"><span></span></div>
-        </div>
-        <div class="linkBody">
-          <span id="packetStatus">0 packets</span>
-          <span id="senderStatus">No sender</span>
-          <span id="referenceStatus">No reference built</span>
-        </div>
-        <div id="packetMix" class="packetMix"></div>
-        <div id="diagnostics" class="diagnostics"></div>
-      </section>
     </main>
 
     <main id="raceView" class="raceGrid dashboardView" hidden>

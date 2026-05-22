@@ -78,8 +78,6 @@ function renderActiveDashboard(state) {
   const selectedInsights = selectedLapInsights(state, selectedLap);
   if (selectedInsightIndex !== null && selectedInsightIndex >= selectedInsights.length) selectedInsightIndex = null;
   renderReviewHero(state, selectedLap, selectedInsights);
-  renderPacketMix(state);
-  renderDiagnostics(state.diagnostics || []);
   renderInsights(selectedInsights);
   renderLaps(state.completedLaps || []);
   renderFeed(state.notices || []);
@@ -117,18 +115,16 @@ function renderSession(state) {
   document.getElementById("sessionLine").textContent = session.trackLengthM
     ? `${trackLabel} · ${session.trackLengthM} m · ${goalLabel}`
     : `${goalLabel} · waiting for F1 24`;
-  document.getElementById("packetStatus").textContent = `${packets.toLocaleString()} packets captured`;
-  document.getElementById("senderStatus").textContent = state.lastSender
-    ? `Source ${state.lastSender[0]}:${state.lastSender[1]}`
-    : "No sender";
-  document.getElementById("referenceStatus").textContent = state.reference
-    ? `${state.reference.name} · ${state.reference.lapTime}`
-    : "No reference built";
-
-  const lamp = document.getElementById("connectionLamp");
-  lamp.classList.toggle("connected", packets > 0 && !state.paused);
-  lamp.classList.toggle("paused", Boolean(state.paused));
-  document.getElementById("connectionLabel").textContent = state.paused ? "Capture paused" : packets > 0 ? "Capturing telemetry" : "No packets";
+  const capturePill = document.getElementById("capturePill");
+  const isCapturing = packets > 0 && !state.paused;
+  capturePill.classList.toggle("connected", isCapturing);
+  capturePill.classList.toggle("paused", Boolean(state.paused));
+  capturePill.title = state.paused
+    ? `${packets.toLocaleString()} packets received · capture paused`
+    : packets > 0
+      ? `${packets.toLocaleString()} packets received · telemetry live`
+      : "No telemetry packets received yet";
+  setText("captureLabel", state.paused ? "Paused" : packets > 0 ? "Live" : "Idle");
 
   pauseButton.dataset.paused = state.paused ? "true" : "false";
   pauseButton.textContent = selectedDashboardView === "race"
@@ -233,49 +229,6 @@ function pulseTile(label, value, pct, tone) {
   appendText(tile, "strong", value);
   tile.appendChild(document.createElement("i"));
   return tile;
-}
-
-function renderPacketMix(state) {
-  const target = document.getElementById("packetMix");
-  target.innerHTML = "";
-  const entries = Object.entries(state.packets || {}).sort((a, b) => b[1] - a[1]).slice(0, 4);
-  const max = Math.max(...entries.map(entry => entry[1]), 1);
-  if (!entries.length) {
-    target.appendChild(empty("Packet counters appear here once telemetry starts."));
-    return;
-  }
-  for (const [name, count] of entries) {
-    const row = document.createElement("div");
-    row.className = "packetRow";
-    const label = document.createElement("span");
-    label.textContent = readablePacketName(name);
-    const bar = document.createElement("div");
-    bar.className = "packetBar";
-    const fill = document.createElement("i");
-    fill.style.width = `${Math.max(5, Math.round(count / max * 100))}%`;
-    bar.appendChild(fill);
-    const value = document.createElement("span");
-    value.textContent = compactNumber(count);
-    row.append(label, bar, value);
-    target.appendChild(row);
-  }
-}
-
-function renderDiagnostics(items) {
-  const target = document.getElementById("diagnostics");
-  target.innerHTML = "";
-  if (!items.length) {
-    target.appendChild(empty("Runtime checks are clear."));
-    return;
-  }
-  for (const item of items) {
-    const div = document.createElement("div");
-    div.className = `diagnostic ${item.level || "info"}`;
-    appendText(div, "strong", item.title || "Status");
-    appendText(div, "span", item.detail || "");
-    appendText(div, "small", item.action || "");
-    target.appendChild(div);
-  }
 }
 
 function renderInsights(insights) {
@@ -407,10 +360,16 @@ function renderRaceStatusStrip(review) {
   const completion = expected ? `${summary.totalLaps || 0}/${expected}` : `${summary.totalLaps || 0}`;
   const status = summary.raceComplete ? "Checkered flag" : summary.lapsRemaining === 0 ? "Distance covered" : "In progress";
   const scored = summary.scoredPct === undefined || summary.scoredPct === null ? "--" : `${Number(summary.scoredPct).toFixed(0)}%`;
+  const positionDelta = summary.netPositionDelta === null || summary.netPositionDelta === undefined
+    ? "--"
+    : summary.netPositionDelta > 0
+      ? `+${summary.netPositionDelta}`
+      : String(summary.netPositionDelta);
+  const positionTone = Number(summary.netPositionDelta || 0) > 0 ? "gain" : Number(summary.netPositionDelta || 0) < 0 ? "loss" : "neutral";
   target.appendChild(statusChip("Status", status, summary.raceComplete ? "gain" : "neutral"));
   target.appendChild(statusChip("Distance", `${completion} laps`, summary.raceComplete ? "gain" : "cyan"));
+  target.appendChild(statusChip("Positions", summary.startPosition && summary.finishPosition ? `P${summary.startPosition} to P${summary.finishPosition} (${positionDelta})` : "--", positionTone));
   target.appendChild(statusChip("Scored", scored, Number(summary.scoredPct || 0) >= 75 ? "gain" : "neutral"));
-  target.appendChild(statusChip("Pace", fmtMs(summary.averageDeltaToBestMs), "yellow"));
   target.appendChild(statusChip("Rating", ranking.score === null || ranking.score === undefined ? "--" : `${Number(ranking.score).toFixed(1)}/10`, "violet"));
 }
 
@@ -476,7 +435,8 @@ function renderRacePositionTrend(points) {
   for (const point of series) {
     drawTrendDot(ctx, xFor(point), yFor(point), point.rankingEligible ? "#45d6ff" : "#81788e", point.rankingEligible ? 3.5 : 2.5);
   }
-  drawChartCaption(ctx, plot, `Best P${bestPos} · worst P${worstPos}`, `L${lapMin} to L${lapMax}`);
+  const startLabel = series[0].label || `L${lapMin}`;
+  drawChartCaption(ctx, plot, `Best P${bestPos} · worst P${worstPos}`, `${startLabel} to L${lapMax}`);
 }
 
 function drawTrendArea(ctx, series, xFor, yFor, plot, color) {
@@ -1362,15 +1322,6 @@ function titleCase(text) {
   return String(text || "")
     .replace(/-/g, " ")
     .replace(/\b\w/g, c => c.toUpperCase());
-}
-
-function readablePacketName(text) {
-  return titleCase(String(text || "").replace(/_/g, " "));
-}
-
-function compactNumber(value) {
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
-  return String(value);
 }
 
 function shortSentence(text) {
