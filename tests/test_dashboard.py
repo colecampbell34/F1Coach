@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import io
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from f1coach.cli import main
 from f1coach.coach import CompletedLap
 from f1coach.dashboard import STATIC_DIR, TelemetryRuntime
+from f1coach.models import PacketHeader, SessionInfo
 
 
 class TelemetryRuntimeTests(unittest.TestCase):
@@ -38,6 +41,22 @@ class TelemetryRuntimeTests(unittest.TestCase):
         self.assertEqual(race_state["completedLaps"][0]["lapTimeMs"], 91_000)
         self.assertEqual(lap_state["dashboardMode"], "lap")
         self.assertEqual(race_state["dashboardMode"], "race")
+
+    def test_incoming_packets_update_active_review_only(self) -> None:
+        runtime = TelemetryRuntime()
+        header = PacketHeader(2024, 24, 1, 18, 1, 1, 1, 0.0, 1, 1, 0, 255)
+        runtime.adapter = Mock()
+        runtime.adapter.decode_header.return_value = header
+        runtime.adapter.decode.return_value = SessionInfo(header, 5000, 3, 10, 5, 0, 22, 30)
+
+        runtime.process_packet(b"packet", ("127.0.0.1", 20777))
+
+        lap_state = runtime.snapshot("lap")
+        race_state = runtime.snapshot("race")
+        self.assertEqual(lap_state["session"]["trackLengthM"], 5000)
+        self.assertIsNone(race_state["session"]["trackLengthM"])
+        self.assertEqual(lap_state["packets"]["session"], 1)
+        self.assertEqual(race_state["packets"].get("session", 0), 0)
 
     def test_new_session_clears_paused_packet_counts(self) -> None:
         runtime = TelemetryRuntime()
@@ -112,6 +131,16 @@ class TelemetryRuntimeTests(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         fake_sock.close.assert_called_once()
 
+    def test_cli_reports_bad_reference_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            reference_path = Path(temp_dir) / "bad-reference.json"
+            reference_path.write_text("{bad json", encoding="utf-8")
+            with patch("sys.stderr", new=io.StringIO()) as stderr:
+                exit_code = main(["dashboard", "--reference", str(reference_path)])
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("Could not load reference file", stderr.getvalue())
+
     def test_dashboard_static_assets_are_present(self) -> None:
         index = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         css = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
@@ -124,15 +153,22 @@ class TelemetryRuntimeTests(unittest.TestCase):
         self.assertIn("Race Overview", index)
         self.assertIn("Position History", index)
         self.assertIn("Run Signals", index)
+        self.assertIn("Setup Signals", index)
+        self.assertIn("Race Phases", index)
+        self.assertIn("Sector Stability", index)
+        self.assertIn("data-map-metric", index)
+        self.assertIn("data-trace-mode", index)
         self.assertIn("capturePill", index)
         self.assertNotIn("Telemetry Link", index)
         self.assertNotIn("Fun Stats", index)
-        self.assertNotIn("Setup Signals", index)
         self.assertNotIn("data-view", index)
         self.assertIn(".appShell", css)
+        self.assertIn(".mapModeToggle", css)
+        self.assertIn(".diagnostics", css)
         self.assertIn("function renderReviewHero", js)
         self.assertIn("function renderRaceReview", js)
-        self.assertNotIn("function renderDiagnostics", js)
+        self.assertIn("function renderDiagnostics", js)
+        self.assertIn("function drawMetricPath", js)
 
 
 if __name__ == "__main__":

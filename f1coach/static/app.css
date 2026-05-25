@@ -237,7 +237,7 @@ button.active {
   height: auto;
   display: grid;
   grid-template-columns: minmax(560px, 3fr) repeat(2, minmax(190px, 1fr));
-  grid-template-rows: 106px minmax(390px, .9fr) 240px 220px;
+  grid-template-rows: minmax(194px, auto) minmax(390px, .9fr) 240px 220px;
   gap: 8px;
   padding: 8px;
 }
@@ -310,6 +310,9 @@ button.active {
   display: grid;
   grid-template-columns: repeat(6, minmax(90px, 1fr));
   gap: 6px;
+}
+.reviewProfile .emptyState, .lapPulseStrip .emptyState {
+  grid-column: 1 / -1;
 }
 .profilePill {
   min-width: 0;
@@ -398,6 +401,31 @@ button.active {
   font-size: 11px;
   line-height: 1.2;
 }
+.mapHeaderTools, .traceHeaderTools {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+.mapModeToggle, .traceModeToggle {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.mapModeToggle button, .traceModeToggle button {
+  min-height: 28px;
+  padding: 0 8px;
+  border-color: transparent;
+  background: rgba(255,255,255,.05);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.mapModeToggle button.active, .traceModeToggle button.active {
+  border-color: var(--cyan);
+  background: rgba(69,214,255,.14);
+  color: var(--cyan);
+}
 .circuitPanel {
   grid-column: 1;
   grid-row: 2 / span 2;
@@ -422,6 +450,12 @@ button.active {
 .circuitPanel, .tracePanel, .focusPanel, .lapShelf, .notesPanel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+}
+.focusPanel {
+  grid-template-rows: auto minmax(0, 1.1fr) minmax(118px, .8fr);
+}
+.notesPanel {
+  grid-template-rows: auto minmax(112px, .7fr) minmax(0, 1fr);
 }
 .circuitPanel canvas { min-height: 500px; }
 .tracePanel canvas { min-height: 130px; }
@@ -461,7 +495,10 @@ canvas {
 .speedLine { background: var(--yellow); }
 .throttleLine { background: var(--green); }
 .brakeLine { background: var(--red); }
-.lapList, .insights, .feed {
+.steerLine { background: var(--cyan); }
+.slipLine, .ersLine { background: var(--violet); }
+.fuelLine { background: var(--cyan); }
+.lapList, .insights, .feed, .setupInsights, .diagnostics {
   min-height: 0;
   height: 100%;
   overflow: auto;
@@ -477,6 +514,41 @@ canvas {
 .insights {
   gap: 8px;
   padding: 8px;
+}
+.setupRail {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-top: 1px solid var(--line);
+  background: rgba(8,7,10,.24);
+}
+.subHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px 3px;
+}
+.subHeader h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.1;
+}
+.setupInsights {
+  gap: 6px;
+  padding-top: 3px;
+}
+.setupInsights div {
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--cyan);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.3;
 }
 .lapCard {
   width: 100%;
@@ -587,6 +659,34 @@ canvas {
   background: rgba(255,255,255,.03);
 }
 .feed.compact div { color: var(--muted); }
+.diagnostics {
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(8,7,10,.22);
+}
+.diagCard {
+  display: grid;
+  gap: 3px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--cyan);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.diagCard.warning { border-left-color: var(--yellow); }
+.diagCard.waiting { border-left-color: var(--quiet); }
+.diagCard.ok { border-left-color: var(--green); }
+.diagCard strong {
+  color: var(--text);
+  font-size: 12px;
+}
+.diagCard span, .diagCard small {
+  font-size: 11px;
+  line-height: 1.28;
+}
+.diagCard small {
+  color: var(--cyan);
+}
 .raceGrid {
   min-height: 0;
   min-height: 1320px;
@@ -724,7 +824,9 @@ canvas {
 }
 .racePacePanel { grid-column: 1 / span 2; grid-row: 2; }
 .racePositionPanel { grid-column: 3 / span 2; grid-row: 2; }
-.powerPanel { grid-column: 1 / span 2; grid-row: 3 / span 2; }
+.powerPanel { grid-column: 1 / span 2; grid-row: 3; }
+.phasePanel { grid-column: 1; grid-row: 4; }
+.sectorPanel { grid-column: 2; grid-row: 4; }
 .funPanel { grid-column: 3; grid-row: 3; }
 .riskPanel { grid-column: 4; grid-row: 3; }
 .standoutPanel { grid-column: 3; grid-row: 4; }

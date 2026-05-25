@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import socket
 import sys
 import threading
@@ -57,7 +58,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         raw_args = ["dashboard"]
         args = build_parser().parse_args(raw_args)
 
-    reference = load_reference(args.reference) if args.reference else None
+    try:
+        reference = load_reference(args.reference) if args.reference else None
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        print(f"Could not load reference file {args.reference!r}: {exc}", file=sys.stderr)
+        return 2
     runtime = TelemetryRuntime(reference=reference)
 
     if args.command == "listen":

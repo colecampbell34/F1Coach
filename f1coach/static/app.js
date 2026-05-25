@@ -10,6 +10,8 @@ const navLinks = {
   race: document.getElementById("raceOverviewLink"),
 };
 const goalButtons = Array.from(document.querySelectorAll("[data-goal]"));
+const mapModeButtons = Array.from(document.querySelectorAll("[data-map-metric]"));
+const traceModeButtons = Array.from(document.querySelectorAll("[data-trace-mode]"));
 const dashboardViews = {
   lap: document.getElementById("lapView"),
   race: document.getElementById("raceView"),
@@ -18,6 +20,8 @@ const appError = document.getElementById("appError");
 let selectedLapNum = null;
 let selectedInsightIndex = null;
 let selectedDashboardView = dashboardMode;
+let mapMetric = "delta";
+let traceMode = "inputs";
 let lastState = null;
 
 function initControls() {
@@ -26,6 +30,20 @@ function initControls() {
       await sendControl("set-goal", { goal: button.dataset.goal });
       await refresh();
     }));
+  });
+  mapModeButtons.forEach(button => {
+    button.addEventListener("click", () => {
+      mapMetric = button.dataset.mapMetric || "delta";
+      updateModeButtons();
+      refreshSafe();
+    });
+  });
+  traceModeButtons.forEach(button => {
+    button.addEventListener("click", () => {
+      traceMode = button.dataset.traceMode || "inputs";
+      updateModeButtons();
+      refreshSafe();
+    });
   });
   pauseButton.addEventListener("click", () => withUiError(async () => {
     const paused = pauseButton.dataset.paused === "true";
@@ -41,6 +59,7 @@ function initControls() {
     await refresh();
   }));
   switchDashboardView(selectedDashboardView);
+  updateModeButtons();
   withUiError(async () => {
     await sendControl("set-dashboard-mode", { mode: selectedDashboardView });
     await refresh();
@@ -79,7 +98,9 @@ function renderActiveDashboard(state) {
   if (selectedInsightIndex !== null && selectedInsightIndex >= selectedInsights.length) selectedInsightIndex = null;
   renderReviewHero(state, selectedLap, selectedInsights);
   renderInsights(selectedInsights);
+  renderSetupInsights(state.setupInsights || []);
   renderLaps(state.completedLaps || []);
+  renderDiagnostics(state.diagnostics || []);
   renderFeed(state.notices || []);
   renderMap(state, selectedLap, selectedInsights);
   renderTrace(state, selectedLap, selectedInsights);
@@ -101,6 +122,15 @@ function switchDashboardView(view) {
   }
   pauseButton.textContent = selectedDashboardView === "race" ? "Pause Race Capture" : "Pause Lap Capture";
   newSessionButton.textContent = selectedDashboardView === "race" ? "New Race Review" : "New Lap Session";
+}
+
+function updateModeButtons() {
+  mapModeButtons.forEach(button => {
+    button.classList.toggle("active", button.dataset.mapMetric === mapMetric);
+  });
+  traceModeButtons.forEach(button => {
+    button.classList.toggle("active", button.dataset.traceMode === traceMode);
+  });
 }
 
 function renderSession(state) {
@@ -175,7 +205,10 @@ function renderReviewProfile(selectedLap) {
   if (!target) return;
   target.innerHTML = "";
   const overview = selectedLap && selectedLap.overview || {};
-  if (!overview.sampleCount) return;
+  if (!overview.sampleCount) {
+    target.appendChild(empty("Lap KPIs appear after a completed lap."));
+    return;
+  }
   const metrics = [
     { label: "Avg speed", value: fmtKmh(overview.avgSpeedKmh), pct: Number(overview.avgSpeedKmh || 0) / 330 * 100, tone: "cyan" },
     { label: "Top speed", value: fmtKmh(overview.topSpeedKmh), pct: Number(overview.topSpeedKmh || 0) / 360 * 100, tone: "yellow" },
@@ -324,6 +357,25 @@ function renderFeed(notices) {
   }
 }
 
+function renderDiagnostics(items) {
+  const target = document.getElementById("diagnostics");
+  if (!target) return;
+  target.innerHTML = "";
+  const visible = (items || []).slice(0, 4);
+  if (!visible.length) {
+    target.appendChild(empty("Telemetry health checks appear here."));
+    return;
+  }
+  for (const item of visible) {
+    const card = document.createElement("div");
+    card.className = `diagCard ${item.level || "info"}`;
+    appendText(card, "strong", item.title || "Status");
+    appendText(card, "span", item.detail || "");
+    appendText(card, "small", item.action || "");
+    target.appendChild(card);
+  }
+}
+
 function renderRaceReview(review) {
   const summary = review.summary || {};
   const ranking = review.powerRanking || {};
@@ -341,6 +393,8 @@ function renderRaceReview(review) {
 
   renderRaceStatusStrip(review);
   renderPowerFactors(review.factors || []);
+  renderRacePhases(review.phaseBreakdown || []);
+  renderRaceSectors(review.sectorTrend || []);
   renderRaceCharts(review.trends || {});
   renderRaceFunStats(review.funStats || []);
   renderRaceRisks(review.riskRegister || []);
@@ -759,8 +813,9 @@ function renderMap(state, selectedLap, insights) {
   const ref = selectedSamples.length ? selectedSamples : fallbackSamples;
   const referenceSamples = referenceTraceSamples(state);
   const selectedInsight = (insights || [])[selectedInsightIndex];
+  const metricLabel = titleCase(mapMetric);
   document.getElementById("mapHint").textContent = selectedLap
-    ? `Lap ${selectedLap.lapNum} trace vs ${referenceSamples.length ? traceReferenceLabel(state) : "reference pending"}`
+    ? `Lap ${selectedLap.lapNum} ${metricLabel} map vs ${referenceSamples.length ? traceReferenceLabel(state) : "reference pending"}`
     : "Complete a lap with motion packets";
   if (ref.length < 2 && selectedTraceSamples.length < 2) {
     centerText(ctx, w, h, "No lap map available yet");
@@ -773,8 +828,10 @@ function renderMap(state, selectedLap, insights) {
     const bounds = getBounds(worldSamples);
     drawGroupedPath(ctx, worldSamples, bounds, "#2e2738", 11);
     drawGroupedPath(ctx, worldSamples, bounds, "#111016", 7);
-    if (selectedSamples.length >= 2 && referenceSamples.length) {
+    if (mapMetric === "delta" && selectedSamples.length >= 2 && referenceSamples.length) {
       drawDeltaPath(ctx, selectedSamples, referenceSamples, bounds);
+    } else if (mapMetric !== "delta") {
+      drawMetricPath(ctx, selectedSamples.length >= 2 ? selectedSamples : worldSamples, bounds, mapMetric);
     } else if (selectedSamples.length >= 2) {
       drawGroupedPath(ctx, selectedSamples, bounds, "#45d6ff", 5);
     } else {
@@ -790,7 +847,7 @@ function renderMap(state, selectedLap, insights) {
   }
 
   document.getElementById("mapHint").textContent += " · schematic fallback";
-  drawSchematicCircuit(ctx, w, h, selectedTraceSamples.length ? selectedTraceSamples : referenceSamples, referenceSamples, selectedInsight);
+  drawSchematicCircuit(ctx, w, h, selectedTraceSamples.length ? selectedTraceSamples : referenceSamples, referenceSamples, selectedInsight, mapMetric);
 }
 
 function renderTrace(state, selectedLap, insights) {
@@ -799,8 +856,9 @@ function renderTrace(state, selectedLap, insights) {
   const samples = selectedLap && selectedLap.samples ? orderedTraceSamples(selectedLap.samples) : [];
   const referenceSamples = referenceTraceSamples(state);
   document.getElementById("traceHint").textContent = selectedLap
-    ? `Lap ${selectedLap.lapNum} speed, throttle, and brake by distance`
+    ? traceHintForMode(selectedLap.lapNum)
     : "Select a completed lap";
+  renderTraceLegend(traceMode);
   drawTraceGrid(ctx, w, h);
   const selectedInsight = (insights || [])[selectedInsightIndex];
   if (selectedInsight) shadeTraceSegment(ctx, w, h, selectedInsight.start_pct / 100, selectedInsight.end_pct / 100);
@@ -809,15 +867,71 @@ function renderTrace(state, selectedLap, insights) {
     return;
   }
   if (referenceSamples.length) {
-    drawSpeedTrace(ctx, referenceSamples, w, h, "rgba(255,255,255,.25)", 1.5);
-    drawTrace(ctx, referenceSamples, w, h, "throttle", 1, "rgba(63,240,154,.24)", 1);
-    drawTrace(ctx, referenceSamples, w, h, "brake", 1, "rgba(255,54,94,.24)", 1);
-    drawTracePoints(ctx, referenceSamples, w, h, "brake", 1, "rgba(255,54,94,.24)", 1.4, 0.04);
+    drawTraceMode(ctx, referenceSamples, w, h, traceMode, true);
   }
-  drawSpeedTrace(ctx, samples, w, h, "#ffd166", 2.5);
-  drawTrace(ctx, samples, w, h, "throttle", 1, "#3ff09a", 2);
-  drawTrace(ctx, samples, w, h, "brake", 1, "#ff365e", 2);
-  drawTracePoints(ctx, samples, w, h, "brake", 1, "#ff365e", 2.2, 0.04);
+  drawTraceMode(ctx, samples, w, h, traceMode, false);
+}
+
+function traceHintForMode(lapNum) {
+  if (traceMode === "control") return `Lap ${lapNum} speed, steering, brake, and slip by distance`;
+  if (traceMode === "energy") return `Lap ${lapNum} speed, ERS, fuel, and throttle by distance`;
+  return `Lap ${lapNum} speed, throttle, and brake by distance`;
+}
+
+function renderTraceLegend(mode) {
+  const target = document.querySelector(".traceLegend");
+  if (!target) return;
+  target.innerHTML = "";
+  const entries = mode === "control"
+    ? [
+      ["speedLine", "Speed"],
+      ["steerLine", "Steer"],
+      ["brakeLine", "Brake"],
+      ["slipLine", "Slip"],
+    ]
+    : mode === "energy"
+      ? [
+        ["speedLine", "Speed"],
+        ["ersLine", "ERS"],
+        ["fuelLine", "Fuel"],
+        ["throttleLine", "Throttle"],
+      ]
+      : [
+        ["speedLine", "Speed"],
+        ["throttleLine", "Throttle"],
+        ["brakeLine", "Brake"],
+      ];
+  for (const [className, label] of entries) {
+    const item = document.createElement("span");
+    const swatch = document.createElement("i");
+    swatch.className = className;
+    item.appendChild(swatch);
+    item.append(label);
+    target.appendChild(item);
+  }
+}
+
+function drawTraceMode(ctx, samples, w, h, mode, muted) {
+  const alpha = muted ? ".24" : "1";
+  const width = muted ? 1.2 : 2.2;
+  if (mode === "control") {
+    drawSpeedTrace(ctx, samples, w, h, muted ? `rgba(255,209,102,${alpha})` : "#ffd166", muted ? 1.4 : 2.4);
+    drawSteerTrace(ctx, samples, w, h, muted ? "rgba(69,214,255,.24)" : "#45d6ff", width);
+    drawTrace(ctx, samples, w, h, "brake", 1, muted ? "rgba(255,54,94,.22)" : "#ff365e", width);
+    drawTrace(ctx, samples, w, h, "avgSlipRatio", 0.45, muted ? "rgba(166,107,255,.22)" : "#a66bff", muted ? 1 : 1.8);
+    return;
+  }
+  if (mode === "energy") {
+    drawSpeedTrace(ctx, samples, w, h, muted ? `rgba(255,209,102,${alpha})` : "#ffd166", muted ? 1.4 : 2.4);
+    drawTrace(ctx, samples, w, h, "ersPercent", 100, muted ? "rgba(166,107,255,.22)" : "#a66bff", width);
+    drawNormalizedTrace(ctx, samples, w, h, "fuelKg", muted ? "rgba(69,214,255,.22)" : "#45d6ff", muted ? 1 : 1.8);
+    drawTrace(ctx, samples, w, h, "throttle", 1, muted ? "rgba(63,240,154,.20)" : "#3ff09a", muted ? 1 : 1.8);
+    return;
+  }
+  drawSpeedTrace(ctx, samples, w, h, muted ? `rgba(255,209,102,${alpha})` : "#ffd166", muted ? 1.4 : 2.5);
+  drawTrace(ctx, samples, w, h, "throttle", 1, muted ? "rgba(63,240,154,.24)" : "#3ff09a", width);
+  drawTrace(ctx, samples, w, h, "brake", 1, muted ? "rgba(255,54,94,.24)" : "#ff365e", width);
+  drawTracePoints(ctx, samples, w, h, "brake", 1, muted ? "rgba(255,54,94,.24)" : "#ff365e", muted ? 1.4 : 2.2, 0.04);
 }
 
 function drawTraceGrid(ctx, w, h) {
@@ -867,6 +981,49 @@ function drawTrace(ctx, samples, w, h, key, max, color, width) {
   ctx.stroke();
 }
 
+function drawSteerTrace(ctx, samples, w, h, color, width) {
+  if (!samples.length) return;
+  const center = h - 24 - 0.5 * (h - 52);
+  ctx.strokeStyle = "rgba(255,255,255,.08)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(42, center);
+  ctx.lineTo(w - 24, center);
+  ctx.stroke();
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  samples.forEach((s, i) => {
+    const x = 42 + s.normalizedDistance * (w - 70);
+    const steer = clamp(Number(s.steer || 0), -1, 1);
+    const y = h - 24 - (0.5 + steer * 0.42) * (h - 52);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+}
+
+function drawNormalizedTrace(ctx, samples, w, h, key, color, width) {
+  const values = samples.map(sample => Number(sample[key])).filter(Number.isFinite);
+  if (values.length < 2) return;
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const span = Math.max(0.001, maxValue - minValue);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  samples.forEach((s, i) => {
+    const raw = Number(s[key]);
+    if (!Number.isFinite(raw)) return;
+    const x = 42 + s.normalizedDistance * (w - 70);
+    const y = h - 24 - ((raw - minValue) / span) * (h - 52);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+}
+
 function drawTracePoints(ctx, samples, w, h, key, max, color, radius, threshold = 0) {
   ctx.fillStyle = color;
   for (const s of samples) {
@@ -898,6 +1055,30 @@ function drawDeltaPath(ctx, samples, referenceSamples, bounds) {
       const midpoint = (previous.normalizedDistance + current.normalizedDistance) / 2;
       const deltaMs = localSegmentDelta(samples, referenceSamples, midpoint);
       ctx.strokeStyle = deltaMs === null ? "#ffd166" : deltaColor(deltaMs);
+      const [x1, y1] = project(previous, bounds);
+      const [x2, y2] = project(current, bounds);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawMetricPath(ctx, samples, bounds, metric) {
+  const ordered = orderedTraceSamples(samples);
+  if (ordered.length < 2) return;
+  const stats = metricStats(ordered, metric);
+  ctx.lineWidth = 7;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (const group of sampleGroups(samples)) {
+    for (let i = 1; i < group.length; i += 1) {
+      const current = group[i];
+      const previous = group[i - 1];
+      const midpoint = (previous.normalizedDistance + current.normalizedDistance) / 2;
+      const sample = nearestSampleAtDistance(ordered, midpoint);
+      ctx.strokeStyle = metricColor(sample, metric, stats);
       const [x1, y1] = project(previous, bounds);
       const [x2, y2] = project(current, bounds);
       ctx.beginPath();
@@ -942,7 +1123,7 @@ function drawStartMarker(ctx, samples, bounds) {
   ctx.stroke();
 }
 
-function drawSchematicCircuit(ctx, w, h, samples, referenceSamples, selectedInsight) {
+function drawSchematicCircuit(ctx, w, h, samples, referenceSamples, selectedInsight, metric = "delta") {
   const ordered = orderedTraceSamples(samples);
   if (ordered.length < 2) {
     centerText(ctx, w, h, "No stable map samples yet");
@@ -951,12 +1132,17 @@ function drawSchematicCircuit(ctx, w, h, samples, referenceSamples, selectedInsi
   drawSchematicPath(ctx, w, h, "#2e2738", 12);
   drawSchematicPath(ctx, w, h, "#111016", 8);
   const segments = 96;
+  const stats = metricStats(ordered, metric);
   for (let index = 1; index <= segments; index += 1) {
     const start = (index - 1) / segments;
     const end = index / segments;
     const midpoint = (start + end) / 2;
-    const deltaMs = referenceSamples.length ? localSegmentDelta(ordered, referenceSamples, midpoint) : null;
-    ctx.strokeStyle = deltaMs === null ? "#45d6ff" : deltaColor(deltaMs);
+    if (metric === "delta") {
+      const deltaMs = referenceSamples.length ? localSegmentDelta(ordered, referenceSamples, midpoint) : null;
+      ctx.strokeStyle = deltaMs === null ? "#45d6ff" : deltaColor(deltaMs);
+    } else {
+      ctx.strokeStyle = metricColor(nearestSampleAtDistance(ordered, midpoint), metric, stats);
+    }
     ctx.lineWidth = 6;
     ctx.lineCap = "round";
     const [x1, y1] = schematicPoint(start, w, h);
@@ -1024,6 +1210,78 @@ function schematicPoint(distance, w, h) {
     cx + Math.cos(angle) * rx * wobble,
     cy + Math.sin(angle) * ry * (1 + Math.cos(angle * 2) * 0.10),
   ];
+}
+
+function nearestSampleAtDistance(samples, distance) {
+  if (!samples.length) return null;
+  let best = samples[0];
+  let bestDistance = Math.abs(best.normalizedDistance - distance);
+  for (const sample of samples) {
+    const diff = Math.abs(sample.normalizedDistance - distance);
+    if (diff < bestDistance) {
+      best = sample;
+      bestDistance = diff;
+    }
+  }
+  return best;
+}
+
+function metricStats(samples, metric) {
+  const values = samples
+    .map(sample => metricValue(sample, metric))
+    .filter(Number.isFinite);
+  if (!values.length) return { min: 0, max: 1 };
+  return { min: Math.min(...values), max: Math.max(...values) };
+}
+
+function metricValue(sample, metric) {
+  if (!sample) return NaN;
+  if (metric === "speed") return Number(sample.speedKmh);
+  if (metric === "brake") return Number(sample.brake);
+  if (metric === "throttle") return Number(sample.throttle);
+  if (metric === "ers") return Number(sample.ersPercent);
+  return NaN;
+}
+
+function metricColor(sample, metric, stats) {
+  const value = metricValue(sample, metric);
+  if (!Number.isFinite(value)) return "#81788e";
+  if (metric === "brake") return heatColor(clamp(value, 0, 1), ["#241f2f", "#ffd166", "#ff365e"]);
+  if (metric === "throttle") return heatColor(clamp(value, 0, 1), ["#241f2f", "#45d6ff", "#3ff09a"]);
+  if (metric === "ers") return heatColor(clamp(value / 100, 0, 1), ["#241f2f", "#45d6ff", "#a66bff"]);
+  const span = Math.max(1, Number(stats.max) - Number(stats.min));
+  const pct = clamp((value - Number(stats.min)) / span, 0, 1);
+  return heatColor(pct, ["#ff365e", "#ffd166", "#3ff09a"]);
+}
+
+function heatColor(pct, colors) {
+  const clamped = clamp(pct, 0, 1);
+  const left = hexToRgb(colors[0]);
+  const middle = hexToRgb(colors[1]);
+  const right = hexToRgb(colors[2]);
+  if (clamped <= 0.5) return rgbToHex(lerpRgb(left, middle, clamped * 2));
+  return rgbToHex(lerpRgb(middle, right, (clamped - 0.5) * 2));
+}
+
+function hexToRgb(hex) {
+  const raw = hex.replace("#", "");
+  return [
+    parseInt(raw.slice(0, 2), 16),
+    parseInt(raw.slice(2, 4), 16),
+    parseInt(raw.slice(4, 6), 16),
+  ];
+}
+
+function lerpRgb(a, b, pct) {
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * pct),
+    Math.round(a[1] + (b[1] - a[1]) * pct),
+    Math.round(a[2] + (b[2] - a[2]) * pct),
+  ];
+}
+
+function rgbToHex(rgb) {
+  return `#${rgb.map(value => value.toString(16).padStart(2, "0")).join("")}`;
 }
 
 function selectedLapFromState(state) {

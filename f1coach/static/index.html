@@ -64,6 +64,8 @@
             <strong id="reviewStatus">--</strong>
           </div>
         </div>
+        <div id="reviewProfile" class="reviewProfile"></div>
+        <div id="lapPulseStrip" class="lapPulseStrip"></div>
       </section>
 
       <section class="lapShelf panel">
@@ -83,10 +85,19 @@
             <h2>Delta Circuit</h2>
             <p id="mapHint">Select a completed lap</p>
           </div>
-          <div class="mapLegend">
-            <span><i class="gain"></i>Gain</span>
-            <span><i class="neutral"></i>Even</span>
-            <span><i class="loss"></i>Loss</span>
+          <div class="mapHeaderTools">
+            <div class="mapLegend">
+              <span><i class="gain"></i>Gain / high</span>
+              <span><i class="neutral"></i>Even / mid</span>
+              <span><i class="loss"></i>Loss / low</span>
+            </div>
+            <div class="mapModeToggle" role="group" aria-label="Map heatmap mode">
+              <button data-map-metric="delta" type="button">Delta</button>
+              <button data-map-metric="speed" type="button">Speed</button>
+              <button data-map-metric="brake" type="button">Brake</button>
+              <button data-map-metric="throttle" type="button">Throttle</button>
+              <button data-map-metric="ers" type="button">ERS</button>
+            </div>
           </div>
         </div>
         <canvas id="trackMap" width="980" height="640"></canvas>
@@ -100,6 +111,13 @@
           </div>
         </div>
         <div id="insights" class="insights"></div>
+        <div class="setupRail">
+          <div class="subHeader">
+            <span class="eyebrow">Engineer</span>
+            <h3>Setup Signals</h3>
+          </div>
+          <div id="setupInsights" class="setupInsights"></div>
+        </div>
       </section>
 
       <section class="tracePanel panel">
@@ -109,10 +127,17 @@
             <h2>Lap Trace</h2>
             <p id="traceHint">Speed, throttle, and brake by distance</p>
           </div>
-          <div class="traceLegend">
-            <span><i class="speedLine"></i>Speed</span>
-            <span><i class="throttleLine"></i>Throttle</span>
-            <span><i class="brakeLine"></i>Brake</span>
+          <div class="traceHeaderTools">
+            <div class="traceLegend">
+              <span><i class="speedLine"></i>Speed</span>
+              <span><i class="throttleLine"></i>Throttle</span>
+              <span><i class="brakeLine"></i>Brake</span>
+            </div>
+            <div class="traceModeToggle" role="group" aria-label="Trace channel mode">
+              <button data-trace-mode="inputs" type="button">Inputs</button>
+              <button data-trace-mode="control" type="button">Control</button>
+              <button data-trace-mode="energy" type="button">Energy</button>
+            </div>
           </div>
         </div>
         <canvas id="trace" width="980" height="260"></canvas>
@@ -125,6 +150,7 @@
             <h2>Coach Log</h2>
           </div>
         </div>
+        <div id="diagnostics" class="diagnostics"></div>
         <div id="notices" class="feed"></div>
       </section>
 
@@ -200,6 +226,26 @@
           </div>
         </div>
         <div id="powerFactors" class="powerFactors"></div>
+      </section>
+
+      <section class="phasePanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Stint Shape</span>
+            <h2>Race Phases</h2>
+          </div>
+        </div>
+        <div id="racePhases" class="racePhases"></div>
+      </section>
+
+      <section class="sectorPanel panel">
+        <div class="panelHeader">
+          <div>
+            <span class="eyebrow">Sector Trend</span>
+            <h2>Sector Stability</h2>
+          </div>
+        </div>
+        <div id="raceSectors" class="raceSectors"></div>
       </section>
 
       <section class="funPanel panel">
